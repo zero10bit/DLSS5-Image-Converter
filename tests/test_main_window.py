@@ -314,6 +314,80 @@ def test_boost_offers_two_four_and_eight_without_a_fixed_8k_cap(window):
     assert "Boost 4×" not in labels
 
 
+def test_an_unavailable_depth_model_falls_back_to_small_without_crashing(window, monkeypatch):
+    """Base/Large have no download source; picking one must use the bundled
+    Small model for the run and say so - not crash the old download path, and
+    not open a dialog. The stored choice is kept so an ONNX export dropped into
+    models\onnx later is picked up without touching Settings."""
+    from dlss5_converter import app as gui
+    from dlss5_converter.onnx_depth import SMALL, OnnxDepthEngine
+
+    monkeypatch.setattr(
+        OnnxDepthEngine, "is_downloaded",
+        classmethod(lambda cls, model_id: model_id == SMALL),
+    )
+    dialogs: list[bool] = []
+    monkeypatch.setattr(gui.QMessageBox, "information", lambda *a, **k: dialogs.append(True))
+    monkeypatch.setattr(gui.QMessageBox, "warning", lambda *a, **k: dialogs.append(True))
+    large = "depth-anything/Depth-Anything-V2-Large-hf"
+    window.settings.depth.model_id = large
+
+    window.ensure_model_downloaded(large)
+
+    assert window.settings.depth.model_id == large
+    assert dialogs == []
+    assert "Small" in window.statusBar().currentMessage()
+    assert window._download_thread is None
+
+
+def test_onboarding_starts_the_tour_only_when_the_runtime_verifies(window, monkeypatch):
+    """The reported trap: the tour ran while the neural pass had silently failed.
+    Now the tour is gated on a passing live check; a fail routes to the
+    setup-incomplete path and does NOT start the tour."""
+    from pathlib import Path as _Path
+
+    from dlss5_converter import runtime as rt
+
+    ready = rt.RuntimeStatus(
+        harness=_Path("engine/dlss5_eval.exe"),
+        neural_dll=_Path("a"), dlss_dll=_Path("b"),
+        addon=_Path("c"), reshade=_Path("d"),
+    )
+    assert ready.ready
+    monkeypatch.setattr(window, "_detect_runtime_with_finder", lambda: ready)
+
+    tour: list[bool] = []
+    incomplete: list[object] = []
+    monkeypatch.setattr(window, "_show_first_conversion_intro", lambda: tour.append(True))
+    monkeypatch.setattr(
+        window, "_onboarding_setup_incomplete", lambda report: incomplete.append(report)
+    )
+
+    # Verification fails -> no tour, setup-incomplete instead.
+    monkeypatch.setattr(window, "_verify_runtime_modal", lambda s: (False, "test_evaluation: fail"))
+    window._run_first_onboarding()
+    assert tour == [] and incomplete == ["test_evaluation: fail"]
+
+    # Verification passes -> the tour runs.
+    tour.clear(); incomplete.clear()
+    monkeypatch.setattr(window, "_verify_runtime_modal", lambda s: (True, "ok"))
+    window._run_first_onboarding()
+    assert tour == [True] and incomplete == []
+
+
+def test_onboarding_without_files_does_not_start_the_tour(window, monkeypatch):
+    """No runtime found: the tour must not run as if setup succeeded."""
+    monkeypatch.setattr(window, "_detect_runtime_with_finder", lambda: None)
+    tour: list[bool] = []
+    incomplete: list[object] = []
+    monkeypatch.setattr(window, "_show_first_conversion_intro", lambda: tour.append(True))
+    monkeypatch.setattr(
+        window, "_onboarding_setup_incomplete", lambda report: incomplete.append(report)
+    )
+    window._run_first_onboarding()
+    assert tour == [] and incomplete == [None]
+
+
 def test_boost_levels_read_as_plain_names(window):
     """No 2×/4×/8× jargon in the sharpness control - Standard/High/Max instead."""
     names = [

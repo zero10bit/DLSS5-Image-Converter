@@ -708,6 +708,15 @@ class RuntimeProbeWorker(QObject):
         self.finished.emit(onboarding.probe_succeeded(report), report)
 
 
+#: Probes whose worker thread has not finished yet. A probe's thread and worker
+#: are Python-owned; if the last reference to the probe goes while the thread
+#: is still winding down (done() has fired, quit() is in flight), Python frees
+#: a running QThread and the process dies with an access violation. Holding the
+#: probe here until the thread's own finished() signal releases it closes that
+#: window without a wait() anywhere on the UI thread.
+_LIVE_PROBES: set["RuntimeProbe"] = set()
+
+
 class RuntimeProbe(QObject):
     """Run the native DLSS check off the UI thread, watchdog-guarded so it can
     never hang the app.
@@ -760,6 +769,8 @@ class RuntimeProbe(QObject):
         self._watchdog.timeout.connect(self._on_timeout)
 
     def start(self) -> None:
+        _LIVE_PROBES.add(self)
+        self._thread.finished.connect(lambda: _LIVE_PROBES.discard(self))
         self._thread.start()
         self._watchdog.start()
 
@@ -1069,7 +1080,9 @@ class FindFilesDialog(QDialog):
 
     def _selection_changed(self, _row: int) -> None:
         plan = self._plan()
-        self.copy_button.setEnabled(len(plan) == len(discovery.WANTED))
+        # Complete means all four wanted files; the plan may also carry Streamline
+        # libraries, which must not be counted as if they were missing mains.
+        self.copy_button.setEnabled(all(name in plan for name in discovery.WANTED))
         if not plan:
             if self._onboarding_mode:
                 self._set_plan_summary({})
@@ -4993,94 +5006,131 @@ class MainWindow(QMainWindow):
         self._run_first_onboarding()
 
     def _run_first_onboarding(self) -> None:
-        """Find the user's runtime, then introduce the app.
+        """Find the user's runtime, verify it actually works, then run the tour.
 
-        The live DLSS check runs in the *background* rather than gating the
-        tour. It initialises DLSS on the GPU, and on some driver/runtime combos
-        that wedges - which is exactly the freeze that used to trap first-run
-        behind an unclosable "Checking DLSS 5" box. Decoupling it means the app
-        is always usable, the tour always reachable, and onboarding always
-        completes, so a hung check can never loop the user back into it.
+        The tour is only worth showing over a *working* app: a user reported
+        being walked through the tutorial while the neural pass had silently
+        failed to load, and concluding the whole app did nothing. So the flow now
+        gates the tour on a live check that passes. The check uses the same
+        cancellable, watchdog-guarded probe as Settings -> Check runtime, so a
+        runtime that hangs is skippable and killed on a timer - it never traps
+        the user behind an unclosable box the way the old modal check did.
         """
+        status = self._detect_runtime_with_finder()
+        if status is not None and status.ready and status.harness is not None:
+            ok, report = self._verify_runtime_modal(status)
+            if ok:
+                self.statusBar().showMessage(
+                    "DLSS 5 verified — the neural pass is live."
+                )
+                self._show_first_conversion_intro()
+            else:
+                self._onboarding_setup_incomplete(report=report)
+        else:
+            self._onboarding_setup_incomplete(report=None)
+
+    def _detect_runtime_with_finder(self) -> runtime.RuntimeStatus | None:
+        """Detect the runtime, offering the file finder if nothing is ready."""
         try:
             status = runtime.detect(self.settings.runtime_dir or None)
         except Exception:  # noqa: BLE001 - the finder is the recovery path
             status = None
-
         if status is None or not status.ready:
             finder = FindFilesDialog(self, onboarding_mode=True)
             QTimer.singleShot(0, finder.start_scan)
             finder.exec()
             try:
                 status = runtime.detect(self.settings.runtime_dir or None)
-            except Exception:  # noqa: BLE001 - tutorial remains useful offline
+            except Exception:  # noqa: BLE001 - handled by the caller
                 status = None
+        return status
 
-        if status is not None and status.ready and status.harness is not None:
-            self._begin_background_probe(status)
-        else:
-            # Files still not in place after the finder. Say so plainly rather
-            # than dropping the user into the tour as if setup succeeded - the
-            # reported trap where people believed the app was working when it had
-            # never found its runtime at all.
-            self.statusBar().showMessage("DLSS 5 files are not set up yet.")
-            QMessageBox.information(
-                self,
-                "DLSS 5 files not set up yet",
-                "The DLSS 5 runtime files were not found, so conversions will "
-                "not change the image yet. The tour below still works, and you "
-                "can add the files any time from Settings → Check runtime.",
-            )
+    def _verify_runtime_modal(self, status: runtime.RuntimeStatus) -> tuple[bool, str]:
+        """Run the live DLSS check behind a cancellable box; return (ok, report).
 
-        self._show_first_conversion_intro()
-
-    def _begin_background_probe(self, status: runtime.RuntimeStatus) -> None:
-        """Confirm the neural path loads, off the UI thread, without blocking.
-
-        The tour and the whole app stay usable while this runs; the watchdog
-        inside RuntimeProbe gives up on a runtime that hangs instead of freezing
-        the window. Passing the status re-stages the files first, so the check
-        reflects what was just copied in.
+        Re-stages the files first (via the status), so the check reflects what
+        was just copied in. Cancelling or a watchdog timeout returns (False, …)
+        rather than hanging - the whole point of not going back to a modal probe
+        that could wedge the window.
         """
-        if self._runtime_probe is not None or status.harness is None:
-            return
-        self.statusBar().showMessage("Checking DLSS 5 in the background…")
+        if status.harness is None:
+            return False, ""
+        dialog = DownloadDialog(
+            "Checking DLSS 5",
+            "One live test confirms that DLSS, ReShade, RenoDX and the neural "
+            "renderer all load together on this GPU.",
+            self,
+        )
+        dialog.setStyleSheet(STYLE)
+        dialog.set_status("Starting the native runtime…")
+        dialog.set_busy()
+        dialog.enable_cancel("Skip this check")
+
         probe = RuntimeProbe(
             status.harness, parent=self, status=status, neural=self.settings.neural
         )
         self._runtime_probe = probe
-        probe.done.connect(self._background_probe_done)
-        probe.start()
+        outcome: dict[str, object] = {}
 
-    def _background_probe_done(self, ok: bool, report: str) -> None:
+        def done(ok: bool, report: str) -> None:
+            outcome["ok"] = ok
+            outcome["report"] = report
+            dialog.accept()
+
+        probe.done.connect(done)
+        dialog.cancelled.connect(probe.skip)
+        probe.start()
+        dialog.exec()
         self._runtime_probe = None
-        if ok:
-            self.statusBar().showMessage("DLSS 5 verified — the neural pass is live.")
-            return
-        # A quiet status-bar line here was the trap users described: files were
-        # present so onboarding walked them into the tour, the background check
-        # failed, and nothing told them - so they concluded the app "does
-        # nothing". Say it plainly, with the specific cause, and offer the fix.
-        self.statusBar().showMessage("DLSS 5 did not load — see the message.")
-        problems = evaluator.interpret_probe(report)
-        detail = "\n\n".join(problems) if problems else (
-            "The live DLSS test did not pass. Open Settings → Check runtime for "
-            "the full report."
-        )
+        return bool(outcome.get("ok", False)), str(outcome.get("report", ""))
+
+    def _onboarding_setup_incomplete(self, report: str | None) -> None:
+        """DLSS is not working (no files, or the live check failed): do NOT walk
+        the user into the tour as if it were. Explain, and let them set it up,
+        explore anyway, or come back next launch."""
+        if report is None:
+            self.statusBar().showMessage("DLSS 5 files are not set up yet.")
+            title = "DLSS 5 files not set up yet"
+            body = (
+                "The DLSS 5 runtime files were not found, so conversions will "
+                "not change the image yet."
+            )
+        else:
+            self.statusBar().showMessage("DLSS 5 did not load — see the message.")
+            problems = evaluator.interpret_probe(report)
+            detail = "\n\n".join(problems) if problems else (
+                "The live DLSS test did not pass."
+            )
+            title = "DLSS 5 is not working yet"
+            body = (
+                "Your files are in place, but the neural pass did not load, so "
+                f"conversions will not change the image yet:\n\n{detail}"
+            )
+
         box = QMessageBox(
-            QMessageBox.Icon.Warning,
-            "DLSS 5 is not hooked up yet",
-            "Your files are in place, but the neural pass did not load, so "
-            "conversions will not change the image until this is fixed:\n\n"
-            f"{detail}\n\nThe app and the tour still work - you can fix this "
-            "any time from Settings → Check runtime.",
+            QMessageBox.Icon.Warning, title,
+            body + "\n\nThe tour is best once DLSS is working. Set it up now, "
+            "explore the app anyway, or come back later — this returns next "
+            "launch.",
             parent=self,
         )
-        box.addButton(QMessageBox.StandardButton.Ok)
-        guide = box.addButton("Troubleshooting", QMessageBox.ButtonRole.HelpRole)
+        fix = box.addButton("Set up files", QMessageBox.ButtonRole.AcceptRole)
+        explore = box.addButton("Explore anyway", QMessageBox.ButtonRole.RejectRole)
+        guide = (
+            box.addButton("Troubleshooting", QMessageBox.ButtonRole.HelpRole)
+            if report is not None else None
+        )
         box.exec()
-        if box.clickedButton() is guide:
+        clicked = box.clickedButton()
+        if clicked is fix:
+            # Try the whole find-and-verify loop again; bounded by the user, who
+            # can pick Explore or close out of it at any point.
+            self._run_first_onboarding()
+        elif clicked is explore:
+            self._show_first_conversion_intro()
+        elif guide is not None and clicked is guide:
             open_help("Troubleshooting")
+        # Otherwise (closed): leave onboarding incomplete so it returns next launch.
 
     def _show_first_conversion_intro(self) -> None:
         palette = PALETTES.get(self.settings.theme, PALETTES[DEFAULT_THEME])
@@ -5176,18 +5226,18 @@ class MainWindow(QMainWindow):
         """Make sure a depth model is usable; never download for an ONNX model.
 
         The Small model ships inside the app. Base and Large are ONNX exports
-        made with scripts\\export_onnx.py and dropped in the models folder -
-        there is nothing to download for them. The worker below fetches the
-        PyTorch weights from the Hub, which the ONNX engine cannot open, so on a
-        settings file that asks for Base it used to pull 400 MB and then report
-        "Could not download the depth model" anyway. Now: a missing Base/Large
-        falls back to Small (onnx_depth.load already does this) with a status
-        line saying how to install it, and the download dialog is reserved for
-        an install with no model at all.
+        made with scripts\\export_onnx.py and dropped in models\\onnx - there is
+        no download source for them in this build. The worker below fetches the
+        PyTorch weights from the Hub, which the ONNX engine cannot open, so a
+        settings file asking for Base used to pull 400 MB and then report
+        "Could not download the depth model" anyway (upstream saw it as an
+        ONNX/engine crash on the same path). Now a missing Base/Large falls
+        back to Small for the run, with a status line saying how to install it;
+        the stored choice is kept so an export dropped in later is picked up
+        without touching Settings. The download dialog is reserved for an
+        install with no model at all.
         """
         model_id = model_id or self.settings.depth.model_id
-        if self._download_thread is not None:
-            return
         if OnnxDepthEngine.is_downloaded(model_id):
             return
         if OnnxDepthEngine.is_downloaded(SMALL):
@@ -5196,6 +5246,8 @@ class MainWindow(QMainWindow):
                 f"{name} is not installed - using the bundled Small depth model. "
                 "Export it with scripts\\export_onnx.py and put it in models\\onnx to use it."
             )
+            return
+        if self._download_thread is not None:
             return
 
         label = next((k for k, v in MODELS.items() if v == model_id), model_id)
