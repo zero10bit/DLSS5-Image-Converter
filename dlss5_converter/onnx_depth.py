@@ -53,19 +53,30 @@ def onnx_models_dir() -> Path:
     return paths.model_cache_dir() / "onnx"
 
 
+def candidate_names(model_id: str) -> tuple[str, ...]:
+    """Filenames accepted for `model_id`: the fp32 export, then the fp16 one.
+
+    The depth-models release on GitHub ships the `.fp16.onnx` variant
+    (scripts/export_onnx.py --fp16); it keeps float32 inputs and outputs, so
+    inference is unchanged and only the name differs.
+    """
+    name = ONNX_FILES.get(model_id)
+    if not name:
+        return ()
+    return (name, name[: -len(".onnx")] + ".fp16.onnx")
+
+
 def locate(model_id: str) -> Path | None:
     """The ONNX file for `model_id`, bundled copy first, else the cache.
 
     Returns None if it is not installed. Bundled wins so a release always has a
     working depth model with no download.
     """
-    name = ONNX_FILES.get(model_id)
-    if not name:
-        return None
     for base in (paths.bundled_onnx_dir(), onnx_models_dir()):
-        candidate = base / name
-        if candidate.is_file():
-            return candidate
+        for name in candidate_names(model_id):
+            candidate = base / name
+            if candidate.is_file():
+                return candidate
     return None
 
 
@@ -187,8 +198,8 @@ class OnnxDepthEngine:
         if path is None:
             raise RuntimeError(
                 f"The ONNX depth model is not installed ({ONNX_FILES[model_id]}). "
-                "The Small model ships with the app; larger models must be "
-                "exported with scripts/export_onnx.py or downloaded."
+                "The Small model ships with the app; larger models come from the "
+                "depth-models-v1 GitHub release or scripts/export_onnx.py."
             )
 
         import onnxruntime as ort

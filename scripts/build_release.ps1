@@ -285,9 +285,10 @@ Set-Content -Path (Join-Path $Release "models\READ ME.txt") -Encoding utf8 -Valu
 The default depth model (Depth Anything V2 Small, ONNX) ships inside the app, so
 it works out of the box with no download.
 
-Base and Large are not downloaded by the app. To use one, export it once from the
-source tree (needs the "export" extra: torch + transformers) and drop the file in
-onnx\ inside this folder:
+Base and Large are not downloaded by the app. To use one, download the .fp16.onnx
+file from the "depth-models-v1" release on the GitHub repo and drop it in onnx\
+inside this folder. Or export it once from the source tree (needs the "export"
+extra: torch + transformers):
 
     python scripts\export_onnx.py --model base --out <this folder>\onnx
 

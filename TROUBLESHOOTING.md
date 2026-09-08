@@ -227,8 +227,10 @@ ffmpeg -framerate 24 -i beauty_%04d_dlss5.png -c:v libx264 -crf 16 out.mp4
 No. Depth runs on ONNX Runtime with the Small Depth Anything V2 model bundled, and
 stills skip depth estimation by default in any case. The only download is PyAV
 (~35 MB, from `pypi.org`) the first time the Video tab is used. The Base and Large
-depth models are not downloaded either: export one with
-`scripts\export_onnx.py` and put it in `models\onnx` if you want it.
+depth models are not downloaded either. To use one, fetch the `.fp16.onnx` file
+from the `depth-models-v1` release on GitHub (or export it with
+`scripts\export_onnx.py`) and put it in `models\onnx`; the app accepts either
+filename.
 
 ---
 

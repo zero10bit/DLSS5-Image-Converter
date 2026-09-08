@@ -67,3 +67,18 @@ def test_infer_matches_the_depth_contract_when_a_model_is_present():
     assert depth.shape == (216, 384)          # back at source resolution
     assert depth.dtype == np.float32
     assert 0.0 <= float(depth.min()) and float(depth.max()) <= 1.0
+
+
+def test_locate_accepts_the_fp16_release_filename(tmp_path, monkeypatch):
+    """The depth-models-v1 release ships `<name>.fp16.onnx`; it must be found
+    without renaming, and the fp32 export still wins when both exist."""
+    monkeypatch.setattr(onnx_depth.paths, "bundled_onnx_dir", lambda: tmp_path / "none")
+    monkeypatch.setattr(onnx_depth, "onnx_models_dir", lambda: tmp_path)
+    large = "depth-anything/Depth-Anything-V2-Large-hf"
+    assert onnx_depth.locate(large) is None
+    fp16 = tmp_path / "Depth-Anything-V2-Large-hf.fp16.onnx"
+    fp16.write_bytes(b"x")
+    assert onnx_depth.locate(large) == fp16
+    fp32 = tmp_path / "Depth-Anything-V2-Large-hf.onnx"
+    fp32.write_bytes(b"x")
+    assert onnx_depth.locate(large) == fp32

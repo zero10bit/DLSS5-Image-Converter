@@ -5189,7 +5189,8 @@ class MainWindow(QMainWindow):
             name = ONNX_FILES.get(model_id, model_id)
             self.statusBar().showMessage(
                 f"{name} is not installed - using the bundled Small depth model. "
-                "Export it with scripts\\export_onnx.py and put it in models\\onnx to use it."
+                "Download it from the depth-models-v1 GitHub release (or export it "
+                "with scripts\\export_onnx.py) and put it in models\\onnx to use it."
             )
             return
         # Neither the requested model nor the bundled Small one: the install is
