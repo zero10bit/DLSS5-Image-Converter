@@ -37,3 +37,6 @@ sample_video/
 *.mov
 *.mkv
 *.webm
+
+# Private working notes, kept out of the fork.
+TODO.md
