@@ -18,6 +18,7 @@ import pytest
 from dlss5_converter import runtime
 from dlss5_converter.settings import (
     NR_COLOR_MAX,
+    NR_INTENSITY_MAX,
     NR_PAPER_WHITE_MAX,
     NR_PRESETS,
     NR_STRENGTH_MAX,
@@ -35,9 +36,9 @@ def read_section(path):
 
 
 def test_sliders_reach_the_addon(tmp_path):
-    neural = NeuralSettings(intensity=1.5, skin=0.25, local_tone=0.75, structure=2.0)
+    neural = NeuralSettings(intensity=0.5, skin=0.25, local_tone=0.75, structure=2.0)
     section = read_section(runtime.write_addon_config(tmp_path, neural))
-    assert float(section["NRIntensity"]) == pytest.approx(1.5)
+    assert float(section["NRIntensity"]) == pytest.approx(0.5)
     assert float(section["NRSkinStructure"]) == pytest.approx(0.25)
     assert float(section["NRLocalTone"]) == pytest.approx(0.75)
     assert float(section["NRLocalStructure"]) == pytest.approx(2.0)
@@ -51,18 +52,27 @@ def test_each_knob_clamps_to_its_own_ceiling(tmp_path):
         color_strength=99, transfer_strength=99, paper_white=99,
     )
     section = read_section(runtime.write_addon_config(tmp_path, absurd))
-    assert float(section["NRIntensity"]) == pytest.approx(NR_STRENGTH_MAX)
+    assert float(section["NRIntensity"]) == pytest.approx(NR_INTENSITY_MAX)
+    assert float(section["NRSkinStructure"]) == pytest.approx(NR_STRENGTH_MAX)
+    assert float(section["NRLocalTone"]) == pytest.approx(NR_STRENGTH_MAX)
+    assert float(section["NRLocalStructure"]) == pytest.approx(NR_STRENGTH_MAX)
     assert float(section["NRColorStrength"]) == pytest.approx(NR_COLOR_MAX)
     assert float(section["NRTransferStrength"]) == pytest.approx(NR_TRANSFER_MAX)
     assert float(section["NRPaperWhiteScale"]) == pytest.approx(NR_PAPER_WHITE_MAX)
     # The ceilings genuinely differ; if they ever collapse to one value this
     # test still passes but the point of it is gone, so assert that too.
-    assert len({NR_STRENGTH_MAX, NR_COLOR_MAX, NR_PAPER_WHITE_MAX}) == 3
+    assert len({NR_STRENGTH_MAX, NR_INTENSITY_MAX, NR_PAPER_WHITE_MAX}) == 3
 
 
 def test_negatives_clamp_to_zero(tmp_path):
     section = read_section(runtime.write_addon_config(tmp_path, NeuralSettings(skin=-5)))
     assert float(section["NRSkinStructure"]) == pytest.approx(0.0)
+
+
+def test_character_mask_is_switched_on_for_skin(tmp_path):
+    """Without NRAutoMask the runtime ignores NRSkinStructure entirely."""
+    section = read_section(runtime.write_addon_config(tmp_path, NeuralSettings()))
+    assert section["NRAutoMask"] == "1"
 
 
 def test_zero_intensity_disables_the_pass_outright(tmp_path):
@@ -94,7 +104,7 @@ def test_reshades_own_settings_survive(tmp_path):
         f"[{runtime.ADDON_SECTION}]\nNRIntensity=0.1\nNRToggleKey=117\n",
         encoding="utf-8",
     )
-    runtime.write_addon_config(tmp_path, NeuralSettings(intensity=1.25))
+    runtime.write_addon_config(tmp_path, NeuralSettings(intensity=0.75))
 
     parser = configparser.ConfigParser()
     parser.optionxform = str
@@ -103,7 +113,7 @@ def test_reshades_own_settings_survive(tmp_path):
     assert parser["INPUT"]["KeyOverlay"] == "36,0,0,0"
     # Keys inside our own section that we do not manage are left alone too.
     assert parser[runtime.ADDON_SECTION]["NRToggleKey"] == "117"
-    assert float(parser[runtime.ADDON_SECTION]["NRIntensity"]) == pytest.approx(1.25)
+    assert float(parser[runtime.ADDON_SECTION]["NRIntensity"]) == pytest.approx(0.75)
 
 
 def test_key_case_is_preserved(tmp_path):

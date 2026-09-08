@@ -180,8 +180,12 @@ def _grain(img: np.ndarray, amount: float, size: float) -> np.ndarray:
     small_h = max(1, int(height / size))
     small_w = max(1, int(width / size))
     # Generated small and scaled up, so `size` gives genuinely coarser grain
-    # rather than just more of the same fine noise.
-    noise = np.random.default_rng().standard_normal((small_h, small_w)).astype(np.float32)
+    # rather than just more of the same fine noise. Seeded from the frame's
+    # geometry so the Effects preview, the saved file and a re-export all carry
+    # the same grain; an unseeded generator made every redraw a different
+    # image, which read as flicker while dragging a slider.
+    seed = (height * 73_856_093) ^ (width * 19_349_663) ^ int(size * 1000)
+    noise = np.random.default_rng(seed).standard_normal((small_h, small_w)).astype(np.float32)
     if (small_h, small_w) != (height, width):
         noise = cv2.resize(noise, (width, height), interpolation=cv2.INTER_LINEAR)
     return img + (float(amount) * 0.15) * noise[:, :, None]

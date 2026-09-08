@@ -38,10 +38,16 @@ def qt_app():
 def window(qt_app, monkeypatch):
     # Nothing may actually start: these tests are about the UI thread.
     monkeypatch.setattr(QThread, "start", lambda self, *a, **k: None)
-    win = gui.MainWindow()
+    win = gui.MainWindow(startup=False)
     win.resize(1400, 800)
     yield win
+    # Tear down here, not "later": deleteLater alone queues the destruction
+    # until something pumps events, which was the next test that used qWait -
+    # by then a dozen windows died at once inside an unrelated test and the
+    # access violation landed on it.
+    win.close()
     win.deleteLater()
+    qt_app.processEvents()
 
 
 def frame(value: float = 0.5) -> np.ndarray:
@@ -527,7 +533,6 @@ def test_video_effort_does_not_touch_the_sidebar_passes(window, monkeypatch):
     """A video export used to write its pass count to the shared setting, so
     afterwards single-image conversions ran at 1 pass. The video path must use
     its own copy and leave settings.evaluation.frames alone."""
-    from PySide6.QtWidgets import QFileDialog
     from PySide6.QtCore import QThread
 
     window.settings.evaluation.frames = 8   # what the user set in the sidebar

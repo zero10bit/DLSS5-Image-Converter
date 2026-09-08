@@ -82,6 +82,16 @@ class Prepared:
     white: float = 1.0
 
 
+def flat_depth(shape: tuple[int, int]) -> np.ndarray:
+    """The depth plane a still gets when estimation is off: mid-range everywhere.
+
+    Any constant would do - the neural result is byte-identical for every
+    depth plane tried - but mid-range keeps to_hardware_depth's contrast
+    reshaping well away from the near and far clamps.
+    """
+    return np.full(shape, 0.5, np.float32)
+
+
 def prepare(
     image_path: str | Path,
     settings: AppSettings,
@@ -105,15 +115,22 @@ def prepare(
     else:
         source = np.clip(contract.linear_to_srgb(linear), 0.0, 1.0)
 
-    engine.load(settings.depth.model_id, progress=progress)
-    # Depth Anything wants an ordinary 8-bit picture. The tone mapped copy is
-    # exactly that, and gives the model the same scene an SDR capture would.
-    inverse_depth = engine.infer(
-        (np.clip(source, 0.0, 1.0) * 255).astype(np.uint8),
-        progress=progress,
-        input_size=settings.depth.input_size,
-        tiled=settings.depth.tiled,
-    )
+    if settings.depth.estimate_for_stills:
+        engine.load(settings.depth.model_id, progress=progress)
+        # Depth Anything wants an ordinary 8-bit picture. The tone mapped copy
+        # is exactly that, and gives the model the same scene an SDR capture
+        # would.
+        inverse_depth = engine.infer(
+            (np.clip(source, 0.0, 1.0) * 255).astype(np.uint8),
+            progress=progress,
+            input_size=settings.depth.input_size,
+            tiled=settings.depth.tiled,
+        )
+    else:
+        # See DepthSettings.estimate_for_stills: the plane is inert on a still,
+        # so hand the harness a flat one and skip the model entirely.
+        say("Depth: skipped (it does not change a still's result)")
+        inverse_depth = flat_depth(source.shape[:2])
     return Prepared(
         source=source,
         inverse_depth=inverse_depth,
@@ -188,6 +205,21 @@ def depth_preview(inverse_depth: np.ndarray) -> np.ndarray:
     depth_u8 = np.round(np.clip(inverse_depth, 0.0, 1.0) * 255).astype(np.uint8)
     coloured = cv2.applyColorMap(depth_u8, cv2.COLORMAP_TURBO)
     return cv2.cvtColor(coloured, cv2.COLOR_BGR2RGB)
+
+
+def _discard_planes(*planes: Path) -> None:
+    """Remove the harness's scratch planes once the result is in memory.
+
+    A contract at the 7680-pixel Boost edge is ~800 MB across its four planes,
+    nothing reads them after read_output, and the next run rewrites every one -
+    yet they used to sit in the scratch folder for the life of the install.
+    Best-effort: a leftover is not worth failing a finished conversion over.
+    """
+    for plane in planes:
+        try:
+            plane.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def convert(
@@ -309,9 +341,11 @@ def convert(
                 "silently substitute a smaller factor."
             ) from error
         raise
-
-    say("Encoding…")
-    enhanced_linear = contract.read_output(out_path, width, height)
+    else:
+        say("Encoding…")
+        enhanced_linear = contract.read_output(out_path, width, height)
+    finally:
+        _discard_planes(colour_path, plane_paths["depth"], plane_paths["motion"], out_path)
 
     if boost_factor > 1:
         # Concentrate the supersampled result back to the native size. Area
@@ -440,6 +474,91 @@ def _load_for_evaluation(path: Path, max_edge: int):
     return np.clip(contract.linear_to_srgb(linear), 0.0, 1.0), linear, False, 1.0
 
 
+@dataclass
+class _SequenceRun:
+    """Everything one sequence frame needs that is fixed for the whole run.
+
+    Bundled so the per-frame step can live in its own function without a
+    fifteen-argument signature, and so convert_sequence itself reads as what
+    it is: set up one harness, then loop.
+    """
+
+    settings: AppSettings
+    engine: DepthEngine
+    destination: Path
+    depth_frames: list[Path] | None
+    invert_depth: bool
+    grade_settings: object
+    luts_dir: Path
+    colour_path: Path
+    depth_path: Path
+    out_path: Path
+    width: int
+    height: int
+    offsets: list[tuple[float, float]]
+    total: int
+
+
+def _convert_sequence_frame(
+    run: _SequenceRun,
+    harness: evaluator.Harness,
+    colour_plane: np.ndarray,
+    index: int,
+    frame_path: Path,
+) -> SequenceFrame:
+    """Depth, evaluate, grade and save one frame of a sequence on a live harness."""
+    settings = run.settings
+    width, height = run.width, run.height
+    source, linear, is_hdr, white = _load_for_evaluation(
+        frame_path, settings.evaluation.max_edge
+    )
+    if source.shape[:2] != (height, width):
+        raise RuntimeError(
+            f"{frame_path.name} is {source.shape[1]}x{source.shape[0]}, but the "
+            f"sequence started at {width}x{height}. Frames must all be one size."
+        )
+
+    if run.depth_frames is not None:
+        inverse_depth = sequence.load_depth_map(run.depth_frames[index], run.invert_depth)
+        if inverse_depth.shape != (height, width):
+            inverse_depth = cv2.resize(
+                inverse_depth, (width, height), interpolation=cv2.INTER_NEAREST
+            )
+    else:
+        inverse_depth = run.engine.infer(
+            (np.clip(source, 0.0, 1.0) * 255).astype(np.uint8),
+            input_size=settings.depth.input_size,
+            tiled=settings.depth.tiled,
+        )
+
+    shaped = contract.to_hardware_depth(inverse_depth, settings.depth.contrast)
+    np.ascontiguousarray(shaped).tofile(run.depth_path)
+    harness.set_depth(run.depth_path)
+
+    harness.reset_history()
+    for offset in run.offsets:
+        shifted = contract.shift_subpixel(linear, offset[0], offset[1])
+        colour_plane[..., :3] = shifted.astype(np.float16)
+        harness.commit_colour(colour_plane, run.colour_path, offset)
+
+    harness.write(run.out_path)
+    payload, is_linear, preview = _finish(
+        contract.read_output(run.out_path, width, height),
+        is_hdr=is_hdr,
+        grade_settings=run.grade_settings,
+        white=white,
+        effects_settings=settings.effects,
+        luts_dir=run.luts_dir,
+        detail_settings=settings.detail,
+        source_srgb=source,
+    )
+    output = hdr_output_path(
+        run.destination, frame_path.stem, frame_path, style_slug(settings.neural.style)
+    )
+    save_image(payload, output, linear=is_linear)
+    return SequenceFrame(index, run.total, frame_path, output, preview)
+
+
 def convert_sequence(
     frames: list[Path],
     settings: AppSettings,
@@ -515,74 +634,36 @@ def convert_sequence(
     if not settings.evaluation.jitter:
         offsets = [(0.0, 0.0)] * len(offsets)
 
-    with evaluator.Harness(
-        status.harness,
-        width=width,
-        height=height,
-        depth_path=depth_path,
-        motion_path=motion_path,
-        neural=settings.neural,
-        frames=settings.evaluation.frames,
-        use_shmem=True,  # throughput path; falls back to files on an old harness
-    ) as harness:
-        # One colour buffer for the whole sequence — the mapping itself when
-        # shared memory is live — rewritten in place each pass.
-        colour_plane = harness.colour_buffer((height, width, 4))
-        colour_plane[..., 3] = np.float16(1.0)
-        for index, frame_path in enumerate(frames):
-            if should_stop is not None and should_stop():
-                say("Stopped.")
-                return
-            say(f"Frame {index + 1} of {len(frames)} — {frame_path.name}")
-
-            source, linear, is_hdr, white = _load_for_evaluation(
-                frame_path, settings.evaluation.max_edge
+    try:
+        with evaluator.Harness(
+            status.harness,
+            width=width,
+            height=height,
+            depth_path=depth_path,
+            motion_path=motion_path,
+            neural=settings.neural,
+            frames=settings.evaluation.frames,
+            use_shmem=True,  # throughput path; falls back to files on an old harness
+        ) as harness:
+            # One colour buffer for the whole sequence — the mapping itself when
+            # shared memory is live — rewritten in place each pass.
+            colour_plane = harness.colour_buffer((height, width, 4))
+            colour_plane[..., 3] = np.float16(1.0)
+            run = _SequenceRun(
+                settings=settings, engine=engine, destination=destination,
+                depth_frames=depth_frames, invert_depth=invert_depth,
+                grade_settings=grade_settings, luts_dir=luts_dir,
+                colour_path=colour_path, depth_path=depth_path, out_path=out_path,
+                width=width, height=height, offsets=offsets, total=len(frames),
             )
-            if source.shape[:2] != (height, width):
-                raise RuntimeError(
-                    f"{frame_path.name} is {source.shape[1]}x{source.shape[0]}, but the "
-                    f"sequence started at {width}x{height}. Frames must all be one size."
-                )
-
-            if depth_frames is not None:
-                inverse_depth = sequence.load_depth_map(depth_frames[index], invert_depth)
-                if inverse_depth.shape != (height, width):
-                    inverse_depth = cv2.resize(
-                        inverse_depth, (width, height), interpolation=cv2.INTER_NEAREST
-                    )
-            else:
-                inverse_depth = engine.infer(
-                    (np.clip(source, 0.0, 1.0) * 255).astype(np.uint8),
-                    input_size=settings.depth.input_size,
-                    tiled=settings.depth.tiled,
-                )
-
-            shaped = contract.to_hardware_depth(inverse_depth, settings.depth.contrast)
-            np.ascontiguousarray(shaped).tofile(depth_path)
-            harness.set_depth(depth_path)
-
-            harness.reset_history()
-            for offset in offsets:
-                shifted = contract.shift_subpixel(linear, offset[0], offset[1])
-                colour_plane[..., :3] = shifted.astype(np.float16)
-                harness.commit_colour(colour_plane, colour_path, offset)
-
-            harness.write(out_path)
-            payload, is_linear, preview = _finish(
-                contract.read_output(out_path, width, height),
-                is_hdr=is_hdr,
-                grade_settings=grade_settings,
-                white=white,
-                effects_settings=settings.effects,
-                luts_dir=luts_dir,
-                detail_settings=settings.detail,
-                source_srgb=source,
-            )
-            output = hdr_output_path(
-                destination, frame_path.stem, frame_path, style_slug(settings.neural.style)
-            )
-            save_image(payload, output, linear=is_linear)
-            yield SequenceFrame(index, len(frames), frame_path, output, preview)
+            for index, frame_path in enumerate(frames):
+                if should_stop is not None and should_stop():
+                    say("Stopped.")
+                    return
+                say(f"Frame {index + 1} of {len(frames)} — {frame_path.name}")
+                yield _convert_sequence_frame(run, harness, colour_plane, index, frame_path)
+    finally:
+        _discard_planes(colour_path, depth_path, motion_path, out_path)
 
 
 @dataclass
@@ -801,6 +882,7 @@ def convert_video(
         if harness is not None:
             harness.__exit__(None, None, None)
         video_only.unlink(missing_ok=True)
+        _discard_planes(colour_path, depth_path, motion_path, out_path)
 
 
 def convert_batch(
@@ -852,7 +934,9 @@ def convert_batch(
     motion_path = scratch / "batch_motion.bin"
     out_path = scratch / "batch_out.bin"
 
-    engine.load(settings.depth.model_id, progress=progress)
+    estimate_depth = settings.depth.estimate_for_stills
+    if estimate_depth:
+        engine.load(settings.depth.model_id, progress=progress)
     offsets = contract.jitter_sequence(settings.evaluation.frames)
     if not settings.evaluation.jitter:
         offsets = [(0.0, 0.0)] * len(offsets)
@@ -908,11 +992,14 @@ def convert_batch(
                     colour_plane = harness.colour_buffer((height, width, 4))
                     colour_plane[..., 3] = np.float16(1.0)
 
-                inverse_depth = engine.infer(
-                    (np.clip(source, 0.0, 1.0) * 255).astype(np.uint8),
-                    input_size=settings.depth.input_size,
-                    tiled=settings.depth.tiled,
-                )
+                if estimate_depth:
+                    inverse_depth = engine.infer(
+                        (np.clip(source, 0.0, 1.0) * 255).astype(np.uint8),
+                        input_size=settings.depth.input_size,
+                        tiled=settings.depth.tiled,
+                    )
+                else:
+                    inverse_depth = flat_depth((height, width))
                 shaped = contract.to_hardware_depth(inverse_depth, settings.depth.contrast)
                 np.ascontiguousarray(shaped).tofile(depth_path)
                 harness.set_depth(depth_path)
@@ -946,6 +1033,7 @@ def convert_batch(
                 )
     finally:
         close_harness()
+        _discard_planes(colour_path, depth_path, motion_path, out_path)
 
 
 def list_images(folder: Path, recursive: bool = False) -> list[Path]:

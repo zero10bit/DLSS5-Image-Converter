@@ -183,7 +183,9 @@ def run_selftest() -> int:
 
         owned = QApplication.instance() is None
         application = QApplication.instance() or QApplication([])
-        window = MainWindow()
+        # No first-run work: this window exists to be poked and deleted, and a
+        # model download thread left running under a deleted window aborts.
+        window = MainWindow(startup=False)
         window.prepared = pipeline.Prepared(
             source=np.full((64, 96, 3), 0.5, np.float32),
             inverse_depth=np.zeros((64, 96), np.float32),
@@ -195,6 +197,7 @@ def run_selftest() -> int:
         window._end_progress()
         for view in ("photo", "depth", "result", "difference"):
             window.show_view(view)
+        window.close()  # the real teardown: stops workers, waits for threads
         window.deleteLater()
         if owned:
             application.processEvents()

@@ -109,6 +109,9 @@ accumulation it asked for starts from empty regardless.
 The saturation figure above was measured on a synthetic checkerboard, and it was
 wrong. On a photograph the strengths keep working well past 1.0:
 
+*(Superseded: this table moved all four strengths together, so it cannot say
+which knob stopped where. The isolated table further down is the reference.)*
+
 | all four strengths | mean abs Δ vs source (1920×1080 portrait) |
 | ------------------ | ----------------------------------------- |
 | 0.5 | 0.008668 |
@@ -121,6 +124,39 @@ So the ceiling is exactly **2.0**, which is also where the add-on's own sliders
 stop. The app's sliders now run 0..2 (`NR_STRENGTH_MAX`) and
 `write_addon_config` clamps there. Clamping at 1.0, as it briefly did, silently
 discarded half the usable range.
+
+That table moved all four strengths together, which hid a second lesson:
+**measure each knob alone.** Isolated on a deterministic harness run (same
+planes, same frame count, output hashed):
+
+| knob, others at 1.0 | responds up to | then |
+| ------------------- | -------------- | ---- |
+| Intensity | 1.0 (0.5 is exactly the midpoint of 0 and 1) | 1.5, 2.0, 4.0 identical to 1.0 |
+| Local tone | 2.0 | 3.0, 4.0 identical to 2.0 |
+| Structure | 2.0 | 3.0, 4.0 identical to 2.0 |
+| Skin | nothing at all without `NRAutoMask=1`; 2.0 with it | 4.0 identical to 2.0 |
+
+Intensity therefore has its own ceiling (`NR_INTENSITY_MAX`, 1.0), and
+`write_addon_config` switches the add-on's character mask on, because the
+runtime only applies skin structure inside that mask.
+
+The add-on's other ini keys were measured the same way on a 1080p game frame:
+`NRGlobalTone` (0, 1, 2), `NRDepthMode` (0, 1, 2), `NRUICorrection` (0, 1) and
+`NRDiffuseWhiteNits` (80, 203, 1000 — the add-on clamps that one to 500 and
+logs it) all produced byte-identical output. None is worth exposing on a DLAA
+still; `write_addon_config` leaves them at the add-on's defaults on purpose.
+
+**The depth plane does not change the neural result either.** Six different
+depth planes for the same frame — Depth Anything's estimate, its inverse, flat
+near, flat far, flat mid, and uniform noise — gave byte-identical output. Depth
+is bound to the DLSS evaluation (`pInDepth`, DepthInverted flag set), so the
+plane reaches the runtime; with zero motion vectors and a static frame there is
+simply nothing for it to do, and the neural snippet in this build (310.8) does
+not read it as a guide. The "load-bearing trick" in CLAUDE.md is therefore not
+load-bearing on this path. What this means: depth estimation is only needed for
+the Depth view and for sequences; a still could skip it entirely and save the
+model load and inference. Left as a future change because the UI, onboarding
+and the sequence tab all lean on the depth engine being present.
 
 The lesson worth keeping: **do not measure a saturation point on synthetic
 input.** A gradient-and-checker test card stops responding above 1.0 while a

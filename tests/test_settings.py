@@ -37,3 +37,17 @@ def test_corrupt_file_falls_back_to_defaults(tmp_path):
 
 def test_missing_file_falls_back_to_defaults(tmp_path):
     assert AppSettings.load(tmp_path / "nope.json").evaluation.frames == 8
+
+
+def test_out_of_range_neural_values_are_clamped_on_load(tmp_path):
+    """An older build's slider ran to 2.0; a stored 2.0 must come back as 1.0,
+    and a paper white of 0 must come back at the floor, so the file, the chip
+    readout and the add-on ini agree from the first frame."""
+    from dlss5_converter.settings import NR_INTENSITY_MAX, NR_PAPER_WHITE_MIN
+
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"neural": {"intensity": 2.0, "paper_white": 0.0, "skin": 9}}))
+    loaded = AppSettings.load(path)
+    assert loaded.neural.intensity == NR_INTENSITY_MAX
+    assert loaded.neural.paper_white == NR_PAPER_WHITE_MIN
+    assert loaded.neural.skin == 2.0

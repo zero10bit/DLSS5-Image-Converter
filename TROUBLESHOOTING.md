@@ -6,8 +6,8 @@ Start here, always:
 DLSS5Converter.exe --selftest 2> report.txt
 ```
 
-That runs a real conversion end to end — imports PyTorch, checks CUDA, estimates
-depth, evaluates DLSS, and prints what the RenoDX add-on said, including its
+That runs a real conversion end to end — loads ONNX Runtime, runs a depth
+inference on DirectML, evaluates DLSS, and prints what the RenoDX add-on said, including its
 version. Paste `report.txt` into any bug report and most of the questions below
 answer themselves.
 
@@ -34,8 +34,9 @@ Difference — mean 0.0079, peak 0.0488, amplified 21x     it worked, subtly
 Difference — mean 0.0000, peak 0.0000  (nothing changed)  it did not
 ```
 
-If it worked but you want to *see* it, push Intensity, Skin, Local tone and
-Structure to 2.00.
+If it worked but you want to *see* it, push Skin, Local tone and Structure to
+2.00. Intensity tops out at 1.00 — the runtime treats it as a 0..1 blend and
+ignores anything higher.
 
 ---
 
@@ -45,8 +46,8 @@ NGX refused the GPU. Two causes, and the error message names which one by
 reporting the adapter it actually ran on.
 
 **Not an NVIDIA GPU.** The app is on your machine's default graphics adapter,
-which on a laptop is usually the integrated one. CUDA finds the NVIDIA card by
-itself, which is why depth estimation works and DLSS then fails. Force it:
+which on a laptop is usually the integrated one. DirectML runs depth on whatever
+adapter it is handed, which is why depth estimation works and DLSS then fails. Force it:
 
 > Settings ▸ System ▸ Display ▸ Graphics ▸ Add desktop app.
 > Add **both** `DLSS5Converter.exe` and `engine\dlss5_eval.exe`, set each to
@@ -210,17 +211,13 @@ ffmpeg -framerate 24 -i beauty_%04d_dlss5.png -c:v libx264 -crf 16 out.mp4
 
 ---
 
-## First launch wants 2.2 GB
+## Does the first launch download anything?
 
-PyTorch (~1.8 GB, from `download.pytorch.org`) and a Depth Anything V2 model
-(~400 MB, from `huggingface.co`). Those two hosts are the only things the app
-talks to.
-
-Nothing that can be downloaded is bundled, which is why the app itself is ~400 MB
-instead of 3 GB. Both land in folders beside the executable and survive updates —
-unpack a new version over the old folder and you will not pay for them twice.
-
-An interrupted PyTorch download resumes rather than restarting.
+No. Depth runs on ONNX Runtime with the Small Depth Anything V2 model bundled, and
+stills skip depth estimation by default in any case. The only download is PyAV
+(~35 MB, from `pypi.org`) the first time the Video tab is used. The Base and Large
+depth models are not downloaded either: export one with
+`scripts\export_onnx.py` and put it in `models\onnx` if you want it.
 
 ---
 
@@ -348,7 +345,7 @@ Why this app in particular trips it:
 
 - it is an **unsigned** PyInstaller executable, and unsigned binaries built with
   a shared bootloader are exactly what the heuristic is nervous about;
-- it **downloads** components on first run (PyTorch, the video codec) and
+- it **downloads** a component on first use of the Video tab (PyAV) and
   **launches a second process** (the DLSS harness) — all legitimate, but it
   pattern-matches "downloader that starts things".
 

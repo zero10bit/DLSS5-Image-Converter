@@ -21,7 +21,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QGraphicsDropShadowEffect,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -56,14 +55,16 @@ from . import (
 )
 from . import hdr as hdr_mod
 from .depth_engine import MODELS, DepthEngine
-from .onnx_depth import OnnxDepthEngine
+from .onnx_depth import ONNX_FILES, SMALL, OnnxDepthEngine
 from .settings import (
     BOOST_LEVEL_LABELS,
     DETAIL_BOOST_FACTORS,
     MAX_EDGE_CHOICES,
     max_boost_factor,
     NR_COLOR_MAX,
+    NR_INTENSITY_MAX,
     NR_PAPER_WHITE_MAX,
+    NR_PAPER_WHITE_MIN,
     ONBOARDING_VERSION,
     NR_PRESETS,
     NR_STRENGTH_MAX,
@@ -2357,6 +2358,12 @@ class EffectsPage(QWidget):
     def _make_group(self, title, enable_field, blurb, rows) -> ModuleCard:
         group = ModuleCard(title, checkable=True)
         group.setToolTip(blurb)
+        # Restore the saved state *before* connecting: setChecked emits toggled,
+        # and firing on_change here reaches MainWindow._effects_changed while
+        # the window is still being built (no effects_page yet). Every launch
+        # with an effect left enabled used to log an AttributeError and show a
+        # crash notice on the next start.
+        group.setChecked(bool(getattr(self._settings, enable_field)))
         group.toggled.connect(lambda on, f=enable_field: self._set_enabled(f, on))
         self._groups[enable_field] = group
 
@@ -2371,7 +2378,6 @@ class EffectsPage(QWidget):
             )
             self._rows[field] = row
             group.add(row)
-        group.setChecked(bool(getattr(self._settings, enable_field)))
         return group
 
     def _make_lut_group(self) -> ModuleCard:
@@ -2381,6 +2387,7 @@ class EffectsPage(QWidget):
             "grades. Drop .cube files in the LUTs folder and pick one here; any "
             "pack that exports .cube works."
         )
+        group.setChecked(bool(self._settings.lut_enabled))  # before connect, as above
         group.toggled.connect(lambda on: self._set_enabled("lut_enabled", on))
         self._groups["lut_enabled"] = group
 
@@ -2410,7 +2417,6 @@ class EffectsPage(QWidget):
         )
         self._rows["lut_amount"] = row
         group.add(row)
-        group.setChecked(bool(self._settings.lut_enabled))
         return group
 
     # -- behaviour -----------------------------------------------------------
@@ -2637,7 +2643,16 @@ class ExportDialog(QDialog):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, *, startup: bool = True) -> None:
+        """``startup=False`` builds the window without scheduling first-run work.
+
+        The deferred setup downloads a missing depth model on a worker thread
+        and may open onboarding. A window that is constructed only to be
+        inspected and deleted - the self-test, the UI tests - must not start
+        either: deleting a QMainWindow while its download thread is running
+        aborts the process (0xC0000409), and onboarding then reaches into the
+        already-deleted window.
+        """
         super().__init__()
         self.setWindowTitle("DLSS 5 Image & Video Converter")
         # Sized to the screen rather than fixed: 1280x820 does not fit on a
@@ -2725,6 +2740,17 @@ class MainWindow(QMainWindow):
         self._grade_full_timer.setSingleShot(True)
         self._grade_full_timer.setInterval(250)
         self._grade_full_timer.timeout.connect(self._render_full)
+
+        # Effects sliders fire on every tick of a drag; writing settings.json
+        # each time is a disk write per pixel of mouse travel. Coalesce onto
+        # one save once the drag settles. closeEvent saves unconditionally, so
+        # nothing is lost if the window goes before the timer fires.
+        self._settings_save_timer = QTimer(self)
+        self._settings_save_timer.setSingleShot(True)
+        self._settings_save_timer.setInterval(400)
+        self._settings_save_timer.timeout.connect(
+            lambda: self.settings.save(paths.settings_path())
+        )
 
         # The effects tab's own preview, on the same coalescing idea as the
         # grade: an effect slider drag re-runs the stack over a small image, so
@@ -2872,7 +2898,8 @@ class MainWindow(QMainWindow):
 
         # After the event loop starts, so the window is painted behind the
         # dialog rather than the app appearing to hang on a bare download box.
-        QTimer.singleShot(0, self._start_initial_setup)
+        if startup:
+            QTimer.singleShot(0, self._start_initial_setup)
 
     # -- command bar ---------------------------------------------------------
 
@@ -3701,6 +3728,11 @@ class MainWindow(QMainWindow):
         self._set_view_state(which)
         if which == "depth":
             self._render_depth_preview()
+            if not self.settings.depth.estimate_for_stills:
+                self.statusBar().showMessage(
+                    "Depth was not estimated for this still - it does not change the "
+                    "result. Turn on \"Estimate depth for stills\" in Settings to see it."
+                )
 
     def _set_view_state(self, which: str) -> None:
         self._view = which
@@ -3892,7 +3924,7 @@ class MainWindow(QMainWindow):
             "The luminance the model treats as diffuse white. On an HDR or OLED "
             "display this decides how hard highlights are pushed. The add-on "
             "defaults to 1; shipping game configs use 16, where it stops changing.",
-            maximum=NR_PAPER_WHITE_MAX,
+            maximum=NR_PAPER_WHITE_MAX, minimum=NR_PAPER_WHITE_MIN,
         ))
         hdr.add(SliderRow(
             "HDR transfer", s.transfer_strength, self._neural_setter("transfer_strength"),
@@ -4004,6 +4036,17 @@ class MainWindow(QMainWindow):
         self.tiled.setChecked(self.settings.depth.tiled)
         self.tiled.toggled.connect(self._tiled_changed)
         depth.add(self.tiled)
+        self.estimate_stills = QCheckBox("Estimate depth for stills (Depth view only)")
+        self.estimate_stills.setToolTip(
+            "Off by default: measured on this runtime, the depth plane does not "
+            "change a still's result at all (real and noise depth come back "
+            "byte-identical, with or without motion vectors). Skipping it "
+            "saves the model load and an inference per image. Turn it on to "
+            "populate the Depth view. Sequences and video are unaffected."
+        )
+        self.estimate_stills.setChecked(self.settings.depth.estimate_for_stills)
+        self.estimate_stills.toggled.connect(self._estimate_stills_changed)
+        depth.add(self.estimate_stills)
 
         # -- Help --
         help_card = ModuleCard("Help")
@@ -4090,10 +4133,15 @@ class MainWindow(QMainWindow):
             current=min(len(NR_STYLES) - 1, max(0, settings.style)),
         )
         self.style_box.setToolTip(
-            "The add-on's overall look.\n\n"
-            "Default — the look DLSS 5 starts with.\n"
-            "Natural — subtle grade, closer to the source.\n"
-            "Cinematic — stronger grade, moves furthest from the source."
+            "The add-on's overall look. Measured on 1080p game frames at the "
+            "same strengths:\n\n"
+            "Default — the look DLSS 5 starts with: a neutral relight that "
+            "keeps the source's exposure.\n"
+            "Natural — the strongest of the three. Deeper shadows, darker "
+            "foliage and materials, more contrast; moves furthest from the "
+            "source (about 1.5x Default).\n"
+            "Cinematic — the gentlest: close to Default in size, slightly "
+            "cooler with lifted highlights."
         )
         self.style_box.changed.connect(self._style_changed)
         neural_layout.addWidget(self.style_box)
@@ -4103,10 +4151,13 @@ class MainWindow(QMainWindow):
         # names and the selected one drops its slider in below — the same
         # segmented pattern as the view switch under the image.
         self.neural_params = ChipSliderGroup([
-            ("Intensity", settings.intensity, self._neural_setter("intensity"),
+            # Settings saved by an earlier build can hold up to 2.0 here.
+            ("Intensity", min(settings.intensity, NR_INTENSITY_MAX),
+             self._neural_setter("intensity"),
              "Overall strength of the neural pass. At 0 this is a plain DLAA "
-             "resolve. The add-on's own range is 0..2; it stops changing above 2.",
-             0.0, NR_STRENGTH_MAX),
+             "resolve, at 1 the full pass. The runtime blends linearly between "
+             "the two and ignores anything above 1.",
+             0.0, NR_INTENSITY_MAX),
             ("Skin", settings.skin, self._neural_setter("skin"),
              "Subsurface scattering and pore detail on faces. Lower this first "
              "if results look waxy.",
@@ -4223,7 +4274,10 @@ class MainWindow(QMainWindow):
             "photos.\n\n"
             "Boost — supersample: run DLSS at 2×/4×/8× the size, crispened, "
             "then downscale. Sharper still on renders, but slow (many more "
-            "pixels) and it takes effect on the next Convert, not live."
+            "pixels), it takes effect on the next Convert, not live, and it "
+            "mutes the neural pass: shrinking the result back averages away "
+            "the detail the pass added (measured at 4×: about half the change). "
+            "Use Off or Preserve when you want the strongest DLSS 5 look."
         )
         self.detail_mode.changed.connect(self._detail_mode_changed)
         d_layout.addWidget(self.detail_mode)
@@ -4285,7 +4339,8 @@ class MainWindow(QMainWindow):
                     "and fabric stay crisp — while keeping the neural relight. "
                     "Instant, and the right default.",
         "boost": "Boost runs DLSS larger than the image, then shrinks it back for "
-                 "extra crispness. Slower, and it applies on the next Convert.",
+                 "extra crispness. Slower, applies on the next Convert, and roughly "
+                 "halves the neural change at 4× — Off gives the strongest pass.",
     }
 
     def _sync_boost_guard(self) -> None:
@@ -4441,7 +4496,7 @@ class MainWindow(QMainWindow):
         both refresh on the same coalesced beat — a drag stays responsive and
         the sharp redraw lands once it settles.
         """
-        self.settings.save(paths.settings_path())
+        self._settings_save_timer.start()
         self._validate_lut()
         # The main comparison view, when it is showing the result.
         if self._view in ("result", "styles"):
@@ -4928,7 +4983,10 @@ class MainWindow(QMainWindow):
         self.ensure_model_downloaded()
         if self.settings.onboarding_version >= ONBOARDING_VERSION:
             return
-        if not OnnxDepthEngine.is_downloaded(self.settings.depth.model_id):
+        if not (
+            OnnxDepthEngine.is_downloaded(self.settings.depth.model_id)
+            or OnnxDepthEngine.is_downloaded(SMALL)
+        ):
             # The download dialog already explained the failure. Leave the
             # version at zero so a later successful launch can resume.
             return
@@ -5115,18 +5173,29 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Introduction complete — open Settings to replay it.")
 
     def ensure_model_downloaded(self, model_id: str | None = None) -> None:
-        """Fetch the depth model if it is missing, behind a progress dialog.
+        """Make sure a depth model is usable; never download for an ONNX model.
 
-        Nothing about the model ships with the app — it is a separate download
-        under its own licence — so the first launch has to fetch it. Doing that
-        here rather than inside the first conversion means the wait is explained
-        and measured, instead of appearing as a stalled progress line partway
-        through what the user thought was a conversion.
+        The Small model ships inside the app. Base and Large are ONNX exports
+        made with scripts\\export_onnx.py and dropped in the models folder -
+        there is nothing to download for them. The worker below fetches the
+        PyTorch weights from the Hub, which the ONNX engine cannot open, so on a
+        settings file that asks for Base it used to pull 400 MB and then report
+        "Could not download the depth model" anyway. Now: a missing Base/Large
+        falls back to Small (onnx_depth.load already does this) with a status
+        line saying how to install it, and the download dialog is reserved for
+        an install with no model at all.
         """
         model_id = model_id or self.settings.depth.model_id
         if self._download_thread is not None:
             return
         if OnnxDepthEngine.is_downloaded(model_id):
+            return
+        if OnnxDepthEngine.is_downloaded(SMALL):
+            name = ONNX_FILES.get(model_id, model_id)
+            self.statusBar().showMessage(
+                f"{name} is not installed - using the bundled Small depth model. "
+                "Export it with scripts\\export_onnx.py and put it in models\\onnx to use it."
+            )
             return
 
         label = next((k for k, v in MODELS.items() if v == model_id), model_id)
@@ -5408,6 +5477,10 @@ class MainWindow(QMainWindow):
 
     def _tiled_changed(self, value: bool) -> None:
         self.settings.depth.tiled = value
+        self._depth_settings_changed()
+
+    def _estimate_stills_changed(self, value: bool) -> None:
+        self.settings.depth.estimate_for_stills = value
         self._depth_settings_changed()
 
     # -- live preview --------------------------------------------------------

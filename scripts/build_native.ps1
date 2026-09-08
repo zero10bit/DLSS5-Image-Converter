@@ -54,11 +54,37 @@ if (-not (Test-Path -LiteralPath (Join-Path $Sdk "include\nvsdk_ngx.h"))) {
 }
 
 $Build = Join-Path $Native "build"
-& $CMake -S (Join-Path $Native "dlss5_eval") -B $Build -A x64 -DDLSS_SDK="$Sdk"
-if ($LASTEXITCODE -ne 0) { throw "CMake configuration failed." }
-
-& $CMake --build $Build --config Release
-if ($LASTEXITCODE -ne 0) { throw "Build failed." }
+$Source = Join-Path $Native "dlss5_eval"
+& $CMake -S $Source -B $Build -A x64 -DDLSS_SDK="$Sdk"
+if ($LASTEXITCODE -eq 0) {
+    & $CMake --build $Build --config Release
+    if ($LASTEXITCODE -ne 0) { throw "Build failed." }
+} else {
+    # CMake only offers a Visual Studio generator for versions it knows about.
+    # A CMake older than the installed toolchain (4.1 with Build Tools 18, for
+    # one) silently picks NMake instead and then rejects "-A x64" with
+    # "Generator NMake Makefiles does not support platform specification".
+    # NMake itself is fine - it just needs the MSVC environment set up first,
+    # which vcvars64.bat does. So retry that way before giving up.
+    $VcVars = $null
+    $VsWhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+    if (Test-Path -LiteralPath $VsWhere) {
+        $VsRoot = & $VsWhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath 2>$null | Select-Object -First 1
+        if ($VsRoot) {
+            $Candidate = Join-Path $VsRoot "VC\Auxiliary\Build\vcvars64.bat"
+            if (Test-Path -LiteralPath $Candidate) { $VcVars = $Candidate }
+        }
+    }
+    if (-not $VcVars) {
+        throw "CMake configuration failed, and no MSVC developer environment (vcvars64.bat) was found to retry with NMake."
+    }
+    Write-Host "No Visual Studio generator for this toolchain; building with NMake instead." -ForegroundColor Yellow
+    if (Test-Path -LiteralPath $Build) { Remove-Item -LiteralPath $Build -Recurse -Force }
+    cmd /c "`"$VcVars`" >nul && `"$CMake`" -S `"$Source`" -B `"$Build`" -G `"NMake Makefiles`" -DCMAKE_BUILD_TYPE=Release -DDLSS_SDK=`"$Sdk`" && `"$CMake`" --build `"$Build`" --config Release"
+    if ($LASTEXITCODE -ne 0) { throw "CMake configuration or build failed (NMake fallback)." }
+}
 
 $Exe = Join-Path $Native "bin\dlss5_eval.exe"
 if (-not (Test-Path -LiteralPath $Exe)) {

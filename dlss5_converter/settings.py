@@ -33,13 +33,22 @@ def style_slug(style_index: int) -> str:
     clamped = min(len(NR_STYLES) - 1, max(0, int(style_index)))
     return NR_STYLES[clamped].lower()
 
-#: Top of the add-on's own strength sliders, and measured to be real: on a
-#: photograph the output keeps changing from 1.0 through 2.0 and then stops dead
-#: at exactly 2.0. An earlier version of this file said the ceiling was 1.0,
-#: which came from testing on a synthetic checkerboard that happened not to
-#: respond above 1 — do not trust a saturation claim measured on synthetic
-#: input.
+#: Top of the add-on's own strength sliders, and measured to be real for Local
+#: tone and Structure: on a photograph the output keeps changing from 1.0
+#: through 2.0 and then stops dead at exactly 2.0. An earlier version of this
+#: file said the ceiling was 1.0, which came from testing on a synthetic
+#: checkerboard that happened not to respond above 1 — do not trust a
+#: saturation claim measured on synthetic input.
 NR_STRENGTH_MAX = 2.0
+
+#: Intensity is the exception. Measured on its own (the 2.0 figure above was
+#: taken with all four strengths moving together, which let Local tone and
+#: Structure carry the change): the runtime treats it as a linear 0..1 blend
+#: — 0.5 lands exactly halfway between 0 and 1 — and 1.0, 1.5, 2.0 and 4.0
+#: come back byte-identical. Offering 0..2 made the top half of the slider a
+#: dead zone, which is why every user comparing intensities reported "they
+#: all look the same".
+NR_INTENSITY_MAX = 1.0
 
 #: The HDR group's ceilings, each measured the same way — raise the value until
 #: the output stops changing. They are not all the same and not all 2.0:
@@ -48,6 +57,27 @@ NR_STRENGTH_MAX = 2.0
 NR_COLOR_MAX = 1.0
 NR_TRANSFER_MAX = 1.0
 NR_PAPER_WHITE_MAX = 16.0
+#: Paper white is a scale on the luminance the model treats as diffuse white.
+#: Zero is not a look, it is a division by nothing - the slider and the ini
+#: writer both stop here instead.
+NR_PAPER_WHITE_MIN = 0.1
+
+
+def clamp_neural(neural: "NeuralSettings") -> "NeuralSettings":
+    """Pull every neural value inside the range its slider now offers.
+
+    A settings file from an earlier build can carry ``intensity: 2.0`` (the
+    slider once ran 0..2) or a paper white of 0. Fixing it once on load keeps
+    the stored value, the chip readout and what reaches the add-on in
+    agreement, instead of clamping at three separate places.
+    """
+    neural.intensity = min(NR_INTENSITY_MAX, max(0.0, float(neural.intensity)))
+    for field_name in ("skin", "local_tone", "structure"):
+        setattr(neural, field_name, min(NR_STRENGTH_MAX, max(0.0, float(getattr(neural, field_name)))))
+    neural.color_strength = min(NR_COLOR_MAX, max(0.0, float(neural.color_strength)))
+    neural.transfer_strength = min(NR_TRANSFER_MAX, max(0.0, float(neural.transfer_strength)))
+    neural.paper_white = min(NR_PAPER_WHITE_MAX, max(NR_PAPER_WHITE_MIN, float(neural.paper_white)))
+    return neural
 
 #: Increment only when an existing user should be offered a substantially new
 #: tour. Existing settings without this key predate onboarding and are migrated
@@ -60,9 +90,10 @@ class NeuralSettings:
     """The RenoDX DLSS 5 add-on's exposed controls.
 
     Names mirror the add-on's own UI labels so a user who followed a modding
-    guide finds what they expect, and so do the ranges: the strengths run
-    0..``NR_STRENGTH_MAX`` (2.0), matching the add-on's own sliders, and the two
-    enums are indices into the lists above.
+    guide finds what they expect, and so do the ranges: Skin, Local tone and
+    Structure run 0..``NR_STRENGTH_MAX`` (2.0), matching the add-on's own
+    sliders, Intensity stops at ``NR_INTENSITY_MAX`` (1.0) because the runtime
+    does, and the two enums are indices into the lists above.
     """
 
     #: One of the add-on's four presets. Exposed for completeness and confirmed
@@ -71,9 +102,12 @@ class NeuralSettings:
     #: Resolution preset, which a DLAA-only path never exercises.
     preset: int = 0
     #: Default, Natural or Cinematic (index into NR_STYLES). Unlike the preset
-    #: this is very much live: on a portrait, Cinematic moves the image about 50%
-    #: further from the source than Natural does at the same strengths. Default
-    #: (0) is the add-on's own starting look.
+    #: this is very much live. Measured on three 1080p game frames at the same
+    #: strengths (mean |delta| vs source, 8-bit): Default 8-11, Natural 13-15,
+    #: Cinematic 9. Natural is the strong one - darker, deeper shadows, more
+    #: contrast; Cinematic stays closest to Default. An earlier note here had
+    #: the two the other way round, from a single portrait. Default (0) is the
+    #: add-on's own starting look.
     style: int = 0
     # Defaults are 1.0 - the midpoint of the 0..2 range - rather than the
     # gentler values these once held. The old defaults were low enough that on
@@ -119,6 +153,16 @@ class DepthSettings:
     #: Tile the depth pass for large images. Slow, but the only way to get
     #: hair-level depth detail out of a 4K portrait.
     tiled: bool = False
+    #: Run depth estimation on stills at all. Off by default because it makes
+    #: no difference to the result: measured on this runtime (DLSSNR 310.8),
+    #: six different depth planes for one frame - the estimate, its inverse,
+    #: flat near, flat far, flat mid, uniform noise - came back byte-identical,
+    #: with and without motion vectors (motion itself does change the output,
+    #: so the temporal path is live; depth is simply never read). Estimating it costs a
+    #: model load and an inference per image for nothing but the Depth view;
+    #: turn this on when you want to see that view. Sequences and video keep
+    #: estimating (or use renderer depth) regardless.
+    estimate_for_stills: bool = False
     #: Compresses or expands the near-far spread before it becomes hardware
     #: depth. Above 1.0 pushes the scene towards the near plane, which makes the
     #: model treat more of the frame as foreground.
@@ -130,6 +174,9 @@ class EvaluationSettings:
     #: How many times the same contract is evaluated. DLSS is temporal and a
     #: single pass leaves the accumulator empty; the neural result visibly firms
     #: up over the first few frames and stops changing by roughly eight.
+    #: Measured: more frames do not make the pass *stronger* (mean change from
+    #: the source is the same at 1, 10 and 20), they make it *settle* - one
+    #: frame differs from the ten-frame result by ~1.5 levels, four by ~0.8.
     frames: int = 8
     #: Halton sub-pixel offsets, resampling the source each frame. This is the
     #: only way a still image gives DLSS the sample diversity it was built
@@ -333,7 +380,7 @@ class AppSettings:
             onboarding_version = ONBOARDING_VERSION
 
         return cls(
-            neural=build(NeuralSettings, raw.get("neural")),
+            neural=clamp_neural(build(NeuralSettings, raw.get("neural"))),
             depth=build(DepthSettings, raw.get("depth")),
             evaluation=build(EvaluationSettings, raw.get("evaluation")),
             # grade and effects are both written by to_json but were not read

@@ -15,7 +15,9 @@ from pathlib import Path
 from . import paths
 from .settings import (
     NR_COLOR_MAX,
+    NR_INTENSITY_MAX,
     NR_PAPER_WHITE_MAX,
+    NR_PAPER_WHITE_MIN,
     NR_PRESETS,
     NR_STRENGTH_MAX,
     NR_STYLES,
@@ -346,13 +348,13 @@ def write_addon_config(harness_dir: Path, neural: NeuralSettings) -> Path:
     if not parser.has_section(ADDON_SECTION):
         parser.add_section(ADDON_SECTION)
 
-    def clamp(value: float, ceiling: float = NR_STRENGTH_MAX) -> str:
+    def clamp(value: float, ceiling: float = NR_STRENGTH_MAX, floor: float = 0.0) -> str:
         # Each knob has its own measured ceiling — the point where raising the
         # value stops changing the image. They differ (2.0 for the strengths,
         # 1.0 for colour and transfer, 16.0 for paper-white), so a single shared
         # limit would either truncate one or let another run off into a range
         # the add-on ignores.
-        return f"{min(ceiling, max(0.0, float(value))):.4f}"
+        return f"{min(ceiling, max(floor, float(value))):.4f}"
 
     # Intensity 0 turns the pass off outright rather than running it at zero
     # strength. Measured, these differ: NRIntensity=0 still moves the image,
@@ -360,17 +362,25 @@ def write_addon_config(harness_dir: Path, neural: NeuralSettings) -> Path:
     # the UI promises at 0, and the honest A/B control.
     enabled = float(neural.intensity) > 0.0
     parser.set(ADDON_SECTION, "NeuralUplift", "1" if enabled else "0")
-    parser.set(ADDON_SECTION, "NRIntensity", clamp(neural.intensity))
+    parser.set(ADDON_SECTION, "NRIntensity", clamp(neural.intensity, NR_INTENSITY_MAX))
     parser.set(ADDON_SECTION, "NRSkinStructure", clamp(neural.skin))
     parser.set(ADDON_SECTION, "NRLocalTone", clamp(neural.local_tone))
     parser.set(ADDON_SECTION, "NRLocalStructure", clamp(neural.structure))
+    # Skin structure only applies inside the runtime's character mask, and the
+    # add-on leaves that mask off unless told otherwise. Measured on a frame
+    # that is mostly skin: with the key absent, NRSkinStructure at 0, 0.5, 1
+    # and 2 came back byte-identical; with it set, they all differ and the
+    # value clamps at 2.0 like the other strengths. Without this line the Skin
+    # slider is a no-op.
+    parser.set(ADDON_SECTION, "NRAutoMask", "1")
 
     parser.set(ADDON_SECTION, "NRColorStrength", clamp(neural.color_strength, NR_COLOR_MAX))
     parser.set(
         ADDON_SECTION, "NRTransferStrength", clamp(neural.transfer_strength, NR_TRANSFER_MAX)
     )
     parser.set(
-        ADDON_SECTION, "NRPaperWhiteScale", clamp(neural.paper_white, NR_PAPER_WHITE_MAX)
+        ADDON_SECTION, "NRPaperWhiteScale",
+        clamp(neural.paper_white, NR_PAPER_WHITE_MAX, NR_PAPER_WHITE_MIN),
     )
 
     # Enum indices, clamped to the item lists the add-on actually offers. Game
@@ -384,6 +394,11 @@ def write_addon_config(harness_dir: Path, neural: NeuralSettings) -> Path:
     parser.set(ADDON_SECTION, "NRStyle", index(neural.style, len(NR_STYLES)))
     # DLAA only — see the non-goals in ROADMAP.md.
     parser.set(ADDON_SECTION, "NREnableUpscaling", "0")
+    # Not written, on purpose: NRGlobalTone, NRDepthMode, NRUICorrection,
+    # NRDiffuseWhiteNits and NRMVecScaleX/Y. Each was measured on a 1080p
+    # still (ROADMAP.md) and none changes a byte of the output on this DLAA
+    # path, so they stay at the add-on's own defaults rather than becoming
+    # controls that do nothing.
 
     try:
         with open(path, "w", encoding="utf-8") as handle:

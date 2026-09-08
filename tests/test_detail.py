@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from dlss5_converter import detail
-from dlss5_converter.settings import AppSettings, DetailSettings
+from dlss5_converter.settings import AppSettings
 
 
 def _sharp_lines(size=128):

@@ -188,7 +188,7 @@ def qt_app():
 def test_the_video_tab_sits_between_single_image_and_sequence(qt_app):
     from dlss5_converter.app import MainWindow
 
-    w = MainWindow()
+    w = MainWindow(startup=False)
     order = [w.tabs.tabText(i) for i in range(w.tabs.count())]
     assert order == ["Single image", "Video", "Image sequence", "Effects", "Settings"]
     w.deleteLater()

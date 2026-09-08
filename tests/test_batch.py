@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 from dlss5_converter import pipeline
 from dlss5_converter.settings import AppSettings

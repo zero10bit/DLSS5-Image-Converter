@@ -2,14 +2,20 @@ param(
     # Wipe the frozen application before rebuilding. The user's own folders -
     # dlss_files, models, output - are preserved either way; this only discards
     # PyInstaller's own output and caches.
-    [switch]$Clean
+    [switch]$Clean,
+    # Where the built app goes. Defaults to release\ beside this tree. Point it
+    # at an installed copy to upgrade it in place - the user's folders and
+    # settings listed in $Preserved survive, everything else is replaced. A
+    # source tree living inside the app (as "source") is preserved too.
+    [string]$Release = ""
 )
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $ProjectRoot
 
-$Release = Join-Path $ProjectRoot "release"
+if (-not $Release) { $Release = Join-Path $ProjectRoot "release" }
+$Release = [System.IO.Path]::GetFullPath($Release)
 $Engine = Join-Path $Release "engine"
 $Staging = Join-Path $ProjectRoot "build\pyinstaller"
 
@@ -25,6 +31,11 @@ $AssetsSrc = Join-Path $ProjectRoot "dlss5_converter\assets"
 # No "pytorch" folder any more - depth is ONNX Runtime and the model is bundled,
 # so nothing large is downloaded on first run.
 $UserFolders = @("dlss_files", "models", "output")
+# Also the user's, but never created by the build: LUTs and presets they added,
+# a test folder, and the settings the app writes beside itself when run from
+# here. Everything else in the release folder is the build's to replace. Keeping
+# these is what makes it safe to point this script at an installed copy.
+$Preserved = $UserFolders + @("luts", "presets", "test", "settings.json", "crash.log", "source")
 
 $Python = Join-Path $ProjectRoot ".venv-cuda\Scripts\python.exe"
 if (-not (Test-Path -LiteralPath $Python)) {
@@ -172,11 +183,16 @@ if ($Running) {
 # Replace only the frozen application, leaving the user's folders alone.
 New-Item -ItemType Directory -Force -Path $Release | Out-Null
 Get-ChildItem -LiteralPath $Release -Force | Where-Object {
-    $UserFolders -notcontains $_.Name
+    # Dot-folders (.claude, .git, editor state) are never the build's either.
+    ($Preserved -notcontains $_.Name) -and -not $_.Name.StartsWith(".")
 } | Remove-Item -Recurse -Force
 
-Write-Host "Copying the frozen application into release\ ..." -ForegroundColor Cyan
+Write-Host "Copying the frozen application into $Release ..." -ForegroundColor Cyan
 Copy-Item -Path (Join-Path $Frozen "*") -Destination $Release -Recurse -Force
+# The two text files package_release.ps1 adds to a zip, so a folder built in
+# place is complete on its own.
+Copy-Item -LiteralPath (Join-Path $ProjectRoot "LICENSE") -Destination (Join-Path $Release "LICENSE.txt") -Force
+Copy-Item -LiteralPath (Join-Path $ProjectRoot "TROUBLESHOOTING.md") -Destination (Join-Path $Release "TROUBLESHOOTING.txt") -Force
 
 # PyInstaller brings Python's older VC runtime into _internal, while current
 # PySide6 ships the newer runtime it was linked against inside PySide6\. Windows
@@ -267,8 +283,17 @@ Set-Content -Path (Join-Path $Release "dlss_files\READ ME FIRST.txt") -Value $Re
 
 Set-Content -Path (Join-Path $Release "models\READ ME.txt") -Encoding utf8 -Value @'
 The default depth model (Depth Anything V2 Small, ONNX) ships inside the app, so
-it works out of the box with no download. Larger models (Base/Large) would be
-downloaded here if selected.
+it works out of the box with no download.
+
+Base and Large are not downloaded by the app. To use one, export it once from the
+source tree (needs the "export" extra: torch + transformers) and drop the file in
+onnx\ inside this folder:
+
+    python scripts\export_onnx.py --model base --out <this folder>\onnx
+
+If the selected model is missing the app says so in the status bar and uses Small.
+Measured on this pipeline the depth plane does not change the neural result, so
+Small is not a compromise.
 
 Nothing here is required for the app to run. Rebuilding the app does not touch it.
 '@

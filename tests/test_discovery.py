@@ -92,7 +92,7 @@ def test_an_incomplete_set_is_topped_up_from_elsewhere(tmp_path):
 
 
 def test_install_copies_and_never_overwrites(tmp_path):
-    game = full_set(tmp_path / "game")
+    full_set(tmp_path / "game")
     destination = tmp_path / "dlss_files"
     destination.mkdir()
     (destination / DLSS_DLL).write_bytes(b"the one the user chose")

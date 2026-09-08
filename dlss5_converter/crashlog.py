@@ -94,13 +94,19 @@ def _notify(value: BaseException) -> None:
 
         if QApplication.instance() is None:
             return
+        # Reached from the exception hooks, which run while the app is still
+        # up - an unhandled exception in a slot does not end the process. Say
+        # so: calling it a crash sent people looking for a restart that never
+        # came, and made the notice read as false when the app carried on.
         box = QMessageBox(
-            QMessageBox.Icon.Critical,
-            "DLSS 5 Converter crashed",
+            QMessageBox.Icon.Warning,
+            "DLSS 5 Converter hit an error",
+            "Something went wrong, but the app is still running and you can "
+            "carry on.\n\n"
             f"{type(value).__name__}: {value}\n\n"
-            f"A crash log was written to:\n{log_path()}\n\n"
-            "Please attach it to a bug report - it has the detail that "
-            '"crashed to desktop" does not.',
+            f"The details were written to:\n{log_path()}\n\n"
+            "Please attach that file to a bug report - it has the detail that "
+            "a description of the symptom does not.",
         )
         box.exec()
     except Exception:  # noqa: BLE001 - a crash while reporting a crash helps no one

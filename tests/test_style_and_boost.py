@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 
 from dlss5_converter import pipeline
 from dlss5_converter.settings import (

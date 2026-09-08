@@ -70,6 +70,16 @@ universally use reversed-Z with an infinite far plane: near objects at 1.0, far 
 0.0. Depth Anything V2 emits normalised inverse relative depth — near at 1.0, far at
 0.0. Same curve. No reprojection, no metric depth, no camera.
 
+**Measured 2026-09-08: on a still, the depth plane does not change the result.**
+Six planes for one frame — the estimate, its inverse, flat near, flat far, flat
+mid, uniform noise — came back byte-identical from the neural pass, with and
+without motion vectors. The runtime binds depth and the add-on hands it on as a
+guide, but the DLSSNR 310.8 snippet does not read it for this workload - even
+with fake motion vectors, which do change the output, real and noise depth stay
+identical. Stills therefore skip depth estimation by default
+(`DepthSettings.estimate_for_stills`); the Depth view is the only thing that
+needs it. Sequences and video still estimate, or take renderer depth.
+
 The harness runs a hidden 64×64 swapchain and presents once per evaluation, which
 turns out to be enough for ReShade to attach and load the add-on in a **headless**
 process. That was the open question the whole project rested on.
@@ -114,16 +124,15 @@ refused it.
 2. Put your four files in `dlss_files\`.
 3. Run `DLSS5Converter.exe`.
 
-First launch downloads **PyTorch** (~1.8 GB, from `download.pytorch.org`) and a
-**Depth Anything V2** model (~400 MB, from `huggingface.co`), each with a progress
-bar showing megabytes, rate and time remaining. Both land in folders beside the exe
-and are kept.
+First launch downloads nothing. Depth runs on ONNX Runtime over DirectML, and the
+Small Depth Anything V2 model ships inside the app. (Stills skip depth estimation
+by default anyway - see above.) Only the Video tab fetches something on first use:
+PyAV, ~35 MB.
 
 ```
 DLSS5Converter.exe
 dlss_files\   your own DLSS 5 binaries    <- you fill this
-models\       depth weights               <- downloaded on first launch
-pytorch\      PyTorch                     <- downloaded on first launch
+models\       optional Base/Large ONNX exports (see models\READ ME.txt)
 output\       converted images
 engine\       the DLSS harness
 ```
@@ -156,9 +165,9 @@ every change is a fresh process, and ~3.5 s of the four is NGX and add-on
 initialisation regardless of image size. Depth is cached across runs, and a slider
 drag is debounced into a single evaluation.
 
-Sliders map onto the add-on's own controls: Intensity, Skin, Local Tone, Structure
-(0–2), plus Preset/Style and an HDR group — Paper White (0–16), HDR Transfer (0–1),
-Colour Strength (0–1) — for HDR and OLED displays.
+Sliders map onto the add-on's own controls: Intensity (0–1), Skin, Local Tone,
+Structure (0–2), plus Preset/Style and an HDR group — Paper White (0–16), HDR
+Transfer (0–1), Colour Strength (0–1) — for HDR and OLED displays.
 
 ### Colour, and looking closely
 
@@ -279,7 +288,7 @@ The same sidebar controls apply — neural strengths, style, colour — plus:
 
 Audio is copied from the source unchanged and muxed back in, so the result keeps
 its sound and stays in sync. Video support (PyAV, ~35 MB) downloads on first use
-of this tab, like PyTorch — nothing is bundled.
+of this tab — the one thing the app fetches.
 
 ### Image sequences
 
@@ -316,6 +325,14 @@ size: one harness means one set of NGX buffers.
 neural pass. **Boost** instead enlarges the source, sharpens it, runs DLSS at that
 working resolution, then downsamples to the native size. The selectable factors
 are 2×, 4× and 8×; they process 4, 16 and 64 times as many pixels respectively.
+
+Boost trades neural strength for crispness. The pass works at the pixel scale it
+is given, and the area downsample back to native size averages most of what it
+added away: measured on a 1920×1080 game frame at default strengths, the mean
+change from the source is about 8 levels at native size and about 4.4 at 4×,
+with the same halving in the 99th percentile. For the strongest DLSS 5 look run
+at native size (Detail: Off or Preserve); reach for Boost when a render needs
+edge crispness more than relighting.
 
 Boost has no arbitrary 8K cap and never silently substitutes a lower factor. It
 checks the NVIDIA GPU's currently free VRAM after depth estimation, keeps a small
@@ -452,7 +469,9 @@ inside Visual Studio if it is not on PATH. The SDK clone is blobless and sparse
 `.\scripts\build_release.ps1` produces the portable folder. It **refuses to finish**
 if any `nvngx_*.dll`, `*.addon64` or `dxgi.dll` has ended up inside the application,
 so "bring your own files" is a property of the build rather than something to
-remember. `dlss_files`, `models`, `pytorch` and `output` survive a rebuild.
+remember. `dlss_files`, `models`, `output`, `luts`, `presets`, `test` and
+`settings.json` survive a rebuild, and `-Release <folder>` upgrades an installed
+copy in place.
 
 Tests: `.\.venv-cuda\Scripts\python.exe -m pytest`
 
