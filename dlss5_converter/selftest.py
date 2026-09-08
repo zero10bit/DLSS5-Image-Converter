@@ -1,9 +1,10 @@
 """Prove the runtime actually works, rather than merely appearing to.
 
 Written because a frozen build can pass every startup check and still fail on the
-first conversion: ``bootstrap.is_ready`` uses ``find_spec``, which *locates*
-PyTorch without importing it, so a missing transitive dependency stays invisible
-until something tries to use it.
+first conversion: a startup check that only *locates* a module (find_spec) never
+sees a missing transitive dependency, and the DLSS side can report every
+indicator green while the neural pass silently did nothing. Only running the
+real thing answers it.
 
 The report is written to ``report.txt`` beside the executable (the working
 directory when run from source), and echoed to stderr where one exists:

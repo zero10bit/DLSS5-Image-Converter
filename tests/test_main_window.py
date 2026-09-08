@@ -318,7 +318,7 @@ def test_an_unavailable_depth_model_falls_back_to_small_without_crashing(window,
     """Base/Large have no download source; picking one must use the bundled
     Small model for the run and say so - not crash the old download path, and
     not open a dialog. The stored choice is kept so an ONNX export dropped into
-    models\onnx later is picked up without touching Settings."""
+    models/onnx later is picked up without touching Settings."""
     from dlss5_converter import app as gui
     from dlss5_converter.onnx_depth import SMALL, OnnxDepthEngine
 
@@ -337,7 +337,7 @@ def test_an_unavailable_depth_model_falls_back_to_small_without_crashing(window,
     assert window.settings.depth.model_id == large
     assert dialogs == []
     assert "Small" in window.statusBar().currentMessage()
-    assert window._download_thread is None
+    assert not hasattr(window, "_download_thread")  # the torch-era download path is gone
 
 
 def test_onboarding_starts_the_tour_only_when_the_runtime_verifies(window, monkeypatch):

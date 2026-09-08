@@ -133,3 +133,16 @@ came out of measuring the others.
 Merged upstream `claude/v0.3.1-fixes` (Streamline finder, model fallback, tour
 gating) on top; conflict in `ensure_model_downloaded` resolved to the local
 behaviour. A teardown race in `RuntimeProbe` surfaced by the merged tests is fixed.
+
+## Second audit (post-merge)
+
+- [x] Bugbear/error-class lint over the package: nothing beyond deliberate
+      `global` statements and two style nits.
+- [x] Dead PyTorch-era code removed: `RuntimeWorker` (the 1.9 GB torch
+      download), `DownloadWorker` (called `ensure_downloaded`, which the ONNX
+      engine never had), the `_download_*` machinery, and `bootstrap.install`
+      with its torch constants. The "no model at all" case now says the install
+      is broken instead of opening a download that could only fail.
+- [x] Whole tree compiles with `SyntaxWarning` as an error (one bad escape in a
+      test docstring fixed).
+- [x] README developer lines no longer claim `-Cuda` gives the app GPU depth.

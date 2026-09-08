@@ -457,7 +457,7 @@ Findings from bring-up, measured rather than assumed. Full detail and method in
 ## Build from source
 
 ```powershell
-.\scripts\setup.ps1 -Cuda      # Python 3.12 venv; -Cuda gets GPU depth estimation
+.\scripts\setup.ps1            # Python 3.12 venv (add -Cuda only to run scripts\export_onnx.py)
 .\scripts\build_native.ps1     # clones the NGX SDK, builds dlss5_eval.exe
 .\scripts\run.ps1
 ```
@@ -473,7 +473,7 @@ remember. `dlss_files`, `models`, `output`, `luts`, `presets`, `test` and
 `settings.json` survive a rebuild, and `-Release <folder>` upgrades an installed
 copy in place.
 
-Tests: `.\.venv-cuda\Scripts\python.exe -m pytest`
+Tests: `.\.venv\Scripts\python.exe -m pytest`
 
 ## Layout
 

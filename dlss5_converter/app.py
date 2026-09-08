@@ -648,29 +648,6 @@ class DepthWorker(QObject):
         self.finished.emit(prepared)
 
 
-class RuntimeWorker(QObject):
-    """Downloads and unpacks PyTorch off the UI thread."""
-
-    progress = Signal(str)
-    # object, not int: Qt's int is 32-bit and these totals are not. The
-    # unpacked torch tree is 2.87 GB, which overflows a signed 32-bit int
-    # and made every progress emit raise OverflowError mid-extraction.
-    bytes_progress = Signal(object, object)
-    finished = Signal()
-    failed = Signal(str)
-
-    def run(self) -> None:
-        try:
-            bootstrap.install(
-                on_bytes=lambda done, total: self.bytes_progress.emit(done, total),
-                on_text=self.progress.emit,
-            )
-        except Exception as error:  # noqa: BLE001 - the UI is the error handler
-            self.failed.emit(str(error))
-            return
-        self.finished.emit()
-
-
 class RuntimeProbeWorker(QObject):
     """Prove DLSS, ReShade, RenoDX and the neural module all load.
 
@@ -827,37 +804,6 @@ def ensure_runtime_ready(parent: QWidget | None = None) -> bool:
         )
         return False
     return True
-
-
-class DownloadWorker(QObject):
-    """Fetches a depth model off the UI thread, reporting bytes as it goes."""
-
-    progress = Signal(str)
-    # object, not int: Qt's int is 32-bit and these totals are not. The
-    # unpacked torch tree is 2.87 GB, which overflows a signed 32-bit int
-    # and made every progress emit raise OverflowError mid-extraction.
-    bytes_progress = Signal(object, object)
-    finished = Signal()
-    failed = Signal(str)
-
-    def __init__(self, model_id: str, engine: DepthEngine) -> None:
-        super().__init__()
-        self._model_id = model_id
-        self._engine = engine
-
-    def run(self) -> None:
-        try:
-            self._engine.ensure_downloaded(
-                self._model_id,
-                progress=self.progress.emit,
-                # Passing this is what switches ensure_downloaded into its
-                # size-aware path; without it there are no byte counts to show.
-                bytes_progress=lambda done, total: self.bytes_progress.emit(done, total),
-            )
-        except Exception as error:  # noqa: BLE001 - the UI is the error handler
-            self.failed.emit(str(error))
-            return
-        self.finished.emit()
 
 
 class FindFilesWorker(QObject):
@@ -2702,9 +2648,6 @@ class MainWindow(QMainWindow):
         #: Every ChipSliderGroup in the window, so the density toggle can flip
         #: them all between Compact and Full at once.
         self._chip_groups: list[ChipSliderGroup] = []
-        self._download_thread: QThread | None = None
-        self._download_worker: DownloadWorker | None = None
-        self._download_dialog: DownloadDialog | None = None
         self._seq_thread: QThread | None = None
         self._seq_worker: SequenceWorker | None = None
         self._video_thread: QThread | None = None
@@ -5249,54 +5192,16 @@ class MainWindow(QMainWindow):
                 "Export it with scripts\\export_onnx.py and put it in models\\onnx to use it."
             )
             return
-        if self._download_thread is not None:
-            return
-
-        label = next((k for k, v in MODELS.items() if v == model_id), model_id)
-        self._download_dialog = DownloadDialog(
-            "Finishing setup — just this once.",
-            f"FIRST RUN · STEP 1 OF 3\n\n{label}\n\nThis is a one-time download, kept in the models folder "
-            f"beside the app. Nothing is bundled with the release.",
+        # Neither the requested model nor the bundled Small one: the install is
+        # broken, not waiting on a download. There is no download path any more
+        # (the ONNX engine never had one), so say what is missing instead of
+        # spinning a dialog that could only fail.
+        QMessageBox.critical(
             self,
-        )
-        self._download_dialog.setStyleSheet(STYLE)
-
-        self._download_thread = QThread(self)
-        self._download_worker = DownloadWorker(model_id, self.engine)
-        self._download_worker.moveToThread(self._download_thread)
-        self._download_thread.started.connect(self._download_worker.run)
-        self._download_worker.progress.connect(self._download_dialog.set_status)
-        self._download_worker.bytes_progress.connect(self._download_dialog.update_bytes)
-        self._download_worker.finished.connect(self._download_finished)
-        self._download_worker.failed.connect(self._download_failed)
-        self._download_thread.start()
-        # Modal: there is nothing useful to do in the app without this, and a
-        # conversion started midway through would race the download.
-        self._download_dialog.exec()
-
-    def _close_download(self) -> None:
-        if self._download_thread is not None:
-            self._download_thread.quit()
-            self._download_thread.wait(5000)
-            self._download_thread = None
-        self._download_worker = None
-        if self._download_dialog is not None:
-            self._download_dialog.accept()
-            self._download_dialog = None
-
-    def _download_finished(self) -> None:
-        if self._download_dialog is not None:
-            self._download_dialog.mark_complete()
-        self._close_download()
-        self.statusBar().showMessage("Depth model ready.")
-
-    def _download_failed(self, message: str) -> None:
-        self._close_download()
-        QMessageBox.warning(
-            self,
-            "Could not download the depth model",
-            f"{message}\n\nCheck your connection and reopen the app, or pick a "
-            "different model in the sidebar.",
+            "Depth model missing",
+            f"The bundled depth model ({ONNX_FILES[SMALL]}) is not in this "
+            "install, so no conversion can run. Re-extract the release; the "
+            "file ships inside it and is never downloaded.",
         )
 
     # -- getting an image in -------------------------------------------------
@@ -5947,7 +5852,6 @@ class MainWindow(QMainWindow):
         for thread in (
             self._thread,
             self._depth_thread,
-            self._download_thread,
             self._seq_thread,
             self._video_thread,
             self._video_dl_thread,
@@ -5961,9 +5865,9 @@ class MainWindow(QMainWindow):
             # harness a late-finishing worker manages to start.
             if not thread.wait(5000):
                 thread.terminate()
-        self._thread = self._depth_thread = self._download_thread = None
+        self._thread = self._depth_thread = None
         self._seq_thread = None
-        self._worker = self._depth_worker = self._download_worker = None
+        self._worker = self._depth_worker = None
         super().closeEvent(event)
 
 

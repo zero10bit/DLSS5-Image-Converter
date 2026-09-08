@@ -1,14 +1,9 @@
-"""Fetch the heavy runtime on first launch instead of shipping it.
+"""Fetch optional runtime pieces on first use instead of shipping them.
 
-PyTorch with CUDA is 2.7 GB unpacked and is essentially the entire size of a
-bundled release — the rest of the application is about 300 MB. It is freely
-redistributable, so bundling it is *allowed*; it is just wasteful, because every
-copy of the app then carries a payload that NVIDIA already require the user to
-have a machine capable of running.
-
-So the release ships without it and fetches the wheel once, with a progress bar,
-into a folder that survives app updates. This is the same trade the depth model
-already makes, and it is what keeps the shareable download small.
+Only PyAV lives here now: its wheels bundle a GPL FFmpeg, so having the user's
+machine fetch it from PyPI on first use of the Video tab keeps this project
+clear of redistributing that binary. Depth runs on ONNX Runtime with the Small
+model bundled, so the PyTorch download this module was written for is gone.
 
 Nothing here is a package manager. The wheel is a zip; it is downloaded,
 extracted, and put on ``sys.path``. No pip, no network resolution, no version
@@ -79,20 +74,6 @@ class _Throttle:
             self._on_bytes(done, total)
             self._last = now
 
-#: Pinned exactly. A wheel is tied to both the Python version (cp312) and the
-#: CUDA build, and "latest" would eventually hand a frozen cp312 app a wheel it
-#: cannot import. Update this deliberately, together with pyproject.
-TORCH_VERSION = "2.13.0+cu130"
-TORCH_WHEEL_URL = (
-    "https://download.pytorch.org/whl/cu130/"
-    "torch-2.13.0%2Bcu130-cp312-cp312-win_amd64.whl"
-)
-
-#: Only used to show a total before the server answers, and to sanity-check the
-#: response. Not a checksum: this guards against a truncated download, not a
-#: hostile one.
-TORCH_APPROX_BYTES = 1_915_000_000
-
 #: PyAV carries a full FFmpeg (H.264/H.265, NVENC, AAC muxing) that OpenCV's
 #: prebuilt build does not. Downloaded on first use of the Video tab rather than
 #: shipped: its wheels bundle a GPL FFmpeg, so having the user's machine fetch
@@ -102,54 +83,6 @@ AV_APPROX_BYTES = 35_000_000
 
 BytesProgress = Callable[[int, int], None]
 TextProgress = Callable[[str], None]
-
-
-def runtime_dir() -> Path:
-    """Where the downloaded runtime lives.
-
-    Beside the app in a release, so it is visible and deletable, and — like
-    ``models`` — preserved across rebuilds. Named for what it holds rather than
-    something generic: a folder called ``runtime`` next to ``dlss_files`` would
-    invite people to drop their NVIDIA DLLs into it.
-    """
-    return paths.data_dir() / "pytorch"
-
-
-def activate() -> None:
-    """Put a previously downloaded runtime on the import path.
-
-    Cheap and idempotent — safe to call on every start. Prepended rather than
-    appended so the downloaded copy wins over anything stale.
-    """
-    target = runtime_dir()
-    if not target.is_dir():
-        return
-    entry = str(target)
-    if entry not in sys.path:
-        sys.path.insert(0, entry)
-    # Torch loads its own CUDA DLLs relative to its package directory, but only
-    # once the directory is a legal DLL search path on Windows.
-    lib = target / "torch" / "lib"
-    if lib.is_dir() and hasattr(os, "add_dll_directory"):
-        try:
-            os.add_dll_directory(str(lib))
-        except OSError:
-            pass
-
-
-def is_ready() -> bool:
-    """Whether torch can be imported, from anywhere.
-
-    Deliberately not "did we download it": in a source checkout torch comes from
-    the virtualenv and there is nothing to fetch, and the frozen build may one
-    day bundle it again. The question that matters is whether the import will
-    work.
-    """
-    activate()
-    try:
-        return importlib.util.find_spec("torch") is not None
-    except (ImportError, ValueError):
-        return False
 
 
 def _remote_size(url: str) -> int:
@@ -201,7 +134,7 @@ def _download(url: str, destination: Path, on_bytes: BytesProgress | None) -> No
             if not resuming:
                 have = 0
             total = expected or (
-                int(response.headers.get("Content-Length") or TORCH_APPROX_BYTES) + have
+                int(response.headers.get("Content-Length") or AV_APPROX_BYTES) + have
             )
             done = have
             report = _Throttle(on_bytes)
@@ -308,66 +241,11 @@ def _extract(
         report(done, total, force=True)  # land the bar exactly on the total
 
 
-def install(
-    on_bytes: BytesProgress | None = None,
-    on_text: TextProgress | None = None,
-) -> None:
-    """Download and unpack the runtime. Raises on failure.
-
-    Staged through sibling directories and moved into place at the end, so an
-    interrupted run leaves nothing that ``is_ready`` would mistake for a working
-    install. A half-extracted torch imports far enough to fail confusingly.
-    """
-    target = runtime_dir()
-    staging = target.with_name(target.name + ".partial")
-    archive = target.with_name(target.name + ".whl.part")
-
-    # Only the staging tree is cleared up front. The archive is deliberately
-    # left alone so a retry resumes it: throwing away 1.8 GB because the
-    # *unpack* failed is a punishing way to handle a recoverable error.
-    if staging.is_dir():
-        shutil.rmtree(_os_path(staging), ignore_errors=True)
-
-    target.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        if on_text:
-            on_text(f"Downloading PyTorch {TORCH_VERSION}...")
-        _download(TORCH_WHEEL_URL, archive, on_bytes)
-
-        if on_text:
-            # Said up front because the unpack is slow for a reason the bar
-            # cannot show: Windows scans each large DLL as it is written, and a
-            # 2.7 GB CUDA tree has several. Naming that here is what stops people
-            # killing a run that is working, just quietly.
-            on_text("Unpacking… large files can take a few minutes while Windows scans them.")
-        _extract(archive, staging, on_bytes, on_text)
-
-        if not (staging / "torch" / "__init__.py").is_file():
-            raise OSError("The downloaded runtime is missing its torch package.")
-
-        if target.is_dir():
-            shutil.rmtree(_os_path(target), ignore_errors=True)
-        staging.rename(target)
-    except BaseException:
-        # Keep the archive for the next attempt; drop only the half-unpacked
-        # tree, which is the part that would confuse is_ready().
-        if staging.is_dir():
-            shutil.rmtree(_os_path(staging), ignore_errors=True)
-        raise
-
-    # Success: the archive has done its job and is 1.8 GB of dead weight.
-    try:
-        archive.unlink()
-    except OSError:
-        pass
-    activate()
-
-
 # -- PyAV, for the Video tab -------------------------------------------------
 
 
 def av_runtime_dir() -> Path:
-    """Where the downloaded PyAV lives, beside the PyTorch one."""
+    """Where the downloaded PyAV lives, beside the app's other data."""
     return paths.data_dir() / "pyav"
 
 
