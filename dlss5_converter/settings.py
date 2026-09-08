@@ -117,7 +117,7 @@ class NeuralSettings:
     # material detail lives, and Local tone just above it clears the flat
     # haze the pass otherwise leaves. Intensity stays at the runtime's cap.
     #: Overall strength of the neural pass. 0 is a plain DLAA resolve.
-    intensity: float = 1.0
+    intensity: float = NR_INTENSITY_MAX
     #: Subsurface-scattering and pore-level work on faces. The reason most
     #: people want this tool, and the first thing to lower when output looks
     #: waxy or "yassified".

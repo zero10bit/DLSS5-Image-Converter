@@ -92,13 +92,15 @@ def test_convert_starts_without_raising(window):
     assert window._thread is None
 
 
-def test_a_preview_run_does_not_hijack_the_view(window):
-    """Slider drags re-run DLSS; they must not pull the user off the result."""
+def test_a_preview_run_shows_the_reveal(window):
+    """Live preview now plays the point-cloud reveal (by request): it moves to the
+    photo view and runs the cloud, landing back on the result when it finishes."""
     prepare(window)
     window.result = result()
     window.show_view("result")
     window._start_convert(preview=True)
-    assert window._view == "result"
+    assert window._view == "photo"
+    assert window.depth_view.cloud_active()
     window._teardown()
 
 
@@ -236,17 +238,30 @@ def test_cancel_probe_is_safe_when_nothing_is_running():
     gui.evaluator.cancel_probe()  # must not raise with no probe in flight
 
 
-def test_the_progress_sweep_follows_the_pass_count(window):
+def test_live_preview_runs_the_same_reveal(window):
+    # Live preview shares the point-cloud reveal with a deliberate Convert (by
+    # request), rather than the old grey sweep.
+    prepare(window)
+    window._previewing = True
+    window._begin_progress()
+    assert window.depth_view.cloud_active()
+    assert window.depth_view._progress is None  # not the grey sweep
+    window._end_progress()  # not finishing → stops cleanly
+    assert not window.depth_view.cloud_active()
+
+
+def test_the_depth_view_runs_the_point_cloud_reveal(window):
+    # A full Convert runs the depth point-cloud reveal, which self-animates
+    # rather than tracking the pass count (see reveal.py). It must not fall back
+    # to the grey progress sweep.
     prepare(window)
     window._begin_progress()
-    assert window.depth_view._progress == 0.0
-    window._report_progress("DLSS 5 pass 4 of 8…")
-    assert window.depth_view._progress == pytest.approx(0.5)
-    # A message with no count leaves it where it was rather than resetting.
-    window._report_progress("Reading the result back…")
-    assert window.depth_view._progress == pytest.approx(0.5)
-    window._end_progress()
+    assert window.depth_view.cloud_active()
     assert window.depth_view._progress is None
+    window._report_progress("DLSS 5 pass 4 of 8…")  # ignored by the cloud
+    assert window.depth_view.cloud_active()
+    window._end_progress()
+    assert not window.depth_view.cloud_active()
 
 
 def test_progress_messages_are_harmless_when_no_sweep_is_running(window):
@@ -315,10 +330,39 @@ def test_boost_offers_two_four_and_eight_without_a_fixed_8k_cap(window):
 
 
 def test_an_unavailable_depth_model_falls_back_to_small_without_crashing(window, monkeypatch):
-    """Base/Large have no download source; picking one must use the bundled
-    Small model for the run and say so - not crash the old download path, and
-    not open a dialog. The stored choice is kept so an ONNX export dropped into
-    models/onnx later is picked up without touching Settings."""
+    """A model with no hosted asset (a build made before the fp16 uploads, or
+    a future model) must drop back to the bundled Small model and say so -
+    not crash the download path (the v0.3.0 AttributeError) and not open the
+    download dialog. The sidebar is reverted so it does not claim a model it
+    is not running."""
+    from dlss5_converter import app as gui
+    from dlss5_converter import onnx_depth
+    from dlss5_converter.onnx_depth import SMALL, OnnxDepthEngine
+
+    monkeypatch.setattr(
+        OnnxDepthEngine, "is_downloaded",
+        classmethod(lambda cls, model_id: model_id == SMALL),
+    )
+    monkeypatch.setattr(onnx_depth, "is_downloadable", lambda model_id: False)
+    notices: list[str] = []
+    monkeypatch.setattr(gui.QMessageBox, "information", lambda *a, **k: notices.append(a[1]))
+    monkeypatch.setattr(gui.QMessageBox, "warning", lambda *a, **k: notices.append("warn " + a[1]))
+    monkeypatch.setattr(gui.DownloadDialog, "exec", lambda self: pytest.fail("download dialog opened"))
+    large = "depth-anything/Depth-Anything-V2-Large-hf"
+    window.settings.depth.model_id = large
+
+    window.ensure_model_downloaded(large)
+
+    assert window.settings.depth.model_id == SMALL
+    assert window.model_box.currentData() == SMALL
+    assert notices == ["Using the bundled depth model"]
+    assert window._download_thread is None
+
+
+def test_a_downloadable_depth_model_starts_the_download_worker(window, monkeypatch):
+    """Base/Large are fetched on demand (fp16 ONNX from the depth-models-v1
+    release). Picking one that is not installed goes through DownloadWorker
+    behind the progress dialog, and the stored choice is kept."""
     from dlss5_converter import app as gui
     from dlss5_converter.onnx_depth import SMALL, OnnxDepthEngine
 
@@ -326,18 +370,20 @@ def test_an_unavailable_depth_model_falls_back_to_small_without_crashing(window,
         OnnxDepthEngine, "is_downloaded",
         classmethod(lambda cls, model_id: model_id == SMALL),
     )
-    dialogs: list[bool] = []
-    monkeypatch.setattr(gui.QMessageBox, "information", lambda *a, **k: dialogs.append(True))
-    monkeypatch.setattr(gui.QMessageBox, "warning", lambda *a, **k: dialogs.append(True))
+    opened: list[bool] = []
+    # The QThread fixture stub never runs the worker, so exec() would block
+    # forever waiting on a signal; stand in for the modal loop instead.
+    monkeypatch.setattr(gui.DownloadDialog, "exec", lambda self: opened.append(True))
     large = "depth-anything/Depth-Anything-V2-Large-hf"
     window.settings.depth.model_id = large
 
     window.ensure_model_downloaded(large)
 
+    assert opened == [True]
+    assert isinstance(window._download_worker, gui.DownloadWorker)
     assert window.settings.depth.model_id == large
-    assert dialogs == []
-    assert "Small" in window.statusBar().currentMessage()
-    assert not hasattr(window, "_download_thread")  # the torch-era download path is gone
+    window._close_download()
+    assert window._download_thread is None
 
 
 def test_onboarding_starts_the_tour_only_when_the_runtime_verifies(window, monkeypatch):
@@ -430,25 +476,22 @@ def test_boost_guard_reports_when_nothing_fits(window):
 # -- what a run looks like while it is running -------------------------------
 
 
-def test_a_preview_run_sweeps_the_after_half(window):
-    """A slider nudge must show work happening, without moving the view.
-
-    The previous result stays in front of you and only the after half is
-    recomputed - that is the whole reason to be on this view, and an earlier
-    version threw it away by switching to the source.
+def test_a_preview_run_plays_the_cloud_reveal(window):
+    """A slider nudge shows work happening via the point-cloud reveal on the
+    photo view; progress messages no longer drive a grey sweep, and teardown of
+    a run that is not finishing stops the cloud cleanly.
     """
     prepare(window)
     window.result = result()
     window._succeeded(window.result)
-    window.show_view("result")
 
     window._start_convert(preview=True)
-    assert window._view == "result", "a preview must not move the view"
-    assert window.wipe._progress == 0.0
-    window._report_progress("DLSS 5 pass 6 of 8")
-    assert window.wipe._progress == pytest.approx(0.75)
+    assert window._view == "photo"
+    assert window.depth_view.cloud_active()
+    window._report_progress("DLSS 5 pass 6 of 8")  # ignored by the cloud
+    assert window.depth_view.cloud_active()
     window._teardown()
-    assert window.wipe._progress is None
+    assert not window.depth_view.cloud_active()
 
 
 def test_the_wipe_names_its_halves(window):
@@ -484,8 +527,8 @@ def test_both_style_panes_grey_the_instant_a_run_starts(window):
     window.style_count_box.setCurrentIndex(1)  # Original / Natural / Cinematic
     window.show_view("styles")
 
-    # Original stays colour (never converts); both style panes are grey at 0.0.
-    assert window.side_by_side._progress == [None, 0.0, 0.0]
+    # Original stays colour (never converts); both style panes reveal as the cloud.
+    assert window.side_by_side._reveal == [False, True, True]
 
 
 def test_each_pane_returns_to_colour_only_when_its_own_style_lands(window):
@@ -498,16 +541,16 @@ def test_each_pane_returns_to_colour_only_when_its_own_style_lands(window):
     # three-pane view shows Original, Natural (1), Cinematic (2).
     window._style_started(1)
     window._report_progress("DLSS 5 pass 4 of 8")
-    # Natural sweeping; Cinematic still fully grey, not blank.
-    assert window.side_by_side._progress == [None, pytest.approx(0.5), 0.0]
+    # Natural revealing; Cinematic also still revealing (waiting its turn).
+    assert window.side_by_side._reveal == [False, True, True]
 
     window._style_one_done(1, result())
-    assert window.side_by_side._progress[1] is None, "Natural is done, full colour"
-    assert window.side_by_side._progress[2] == 0.0, "Cinematic still waiting, grey"
+    assert window.side_by_side._reveal[1] is False, "Natural is done, full colour"
+    assert window.side_by_side._reveal[2] is True, "Cinematic still waiting, as cloud"
 
     window._style_started(2)
     window._report_progress("DLSS 5 pass 2 of 8")
-    assert window.side_by_side._progress == [None, None, pytest.approx(0.25)]
+    assert window.side_by_side._reveal == [False, False, True]
 
 
 def test_finishing_a_comparison_clears_up(window):
@@ -515,7 +558,7 @@ def test_finishing_a_comparison_clears_up(window):
     window.show_view("styles")
     window._styles_ready({0: result(), 1: result(), 2: result()})
     assert window._view == "styles"
-    assert window.side_by_side._progress == [None, None]
+    assert window.side_by_side._reveal == [False, False]
     assert window.view_styles.isEnabled(), "the button must come back"
 
 
