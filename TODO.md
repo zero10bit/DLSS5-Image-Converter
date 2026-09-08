@@ -146,3 +146,16 @@ behaviour. A teardown race in `RuntimeProbe` surfaced by the merged tests is fix
 - [x] Whole tree compiles with `SyntaxWarning` as an error (one bad escape in a
       test docstring fixed).
 - [x] README developer lines no longer claim `-Cuda` gives the app GPU depth.
+
+## Shipped defaults (2026-09-08)
+
+- [x] Depth models from the `depth-models-v1` GitHub release are recognised
+      (`<name>.fp16.onnx`); the fp32 export still wins when both exist.
+- [x] The defaults are now the tuned look rather than neutral midpoints:
+      Cinematic, Skin 0.65, Local tone 1.1, Structure 1.3, paper white 0.9,
+      1 frame, Max size 1920, Detail Preserve at 1.0, vibrance 0.03, tone LUT
+      on. `luts/tone-target-match.cube` (+ its generator) ships in the tree and
+      the build copies it into a fresh install's `luts\` without overwriting a
+      user's copy. A fresh `AppSettings()` and the tuned `settings.json` give
+      a byte-identical result on a test frame. Depth model stays Small (the
+      only bundled one; stills do not read depth).

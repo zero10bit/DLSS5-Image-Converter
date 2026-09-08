@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from dlss5_converter import detail
-from dlss5_converter.settings import AppSettings
+from dlss5_converter.settings import AppSettings, DetailSettings
 
 
 def _sharp_lines(size=128):
@@ -108,4 +108,5 @@ def test_detail_settings_round_trip(tmp_path):
     assert b.detail.mode == "boost"
     assert b.detail.amount == pytest.approx(0.9)
     assert b.detail.supersample == 8
-    assert AppSettings().detail.is_neutral  # default is off
+    assert AppSettings().detail.mode == "preserve"  # default gives source texture back
+    assert DetailSettings(mode="off").is_neutral

@@ -235,6 +235,18 @@ foreach ($Folder in $UserFolders) {
 New-Item -ItemType Directory -Force -Path $Engine | Out-Null
 Copy-Item -LiteralPath $Harness -Destination $Engine -Force
 
+# The default settings enable the tone LUT, so a fresh install needs the file.
+# luts\ is the user's folder (preserved above), so only fill in what is missing:
+# a LUT they edited or replaced under the same name is theirs to keep.
+$Luts = Join-Path $Release "luts"
+New-Item -ItemType Directory -Force -Path $Luts | Out-Null
+foreach ($Shipped in Get-ChildItem -LiteralPath (Join-Path $ProjectRoot "luts") -File) {
+    $Target = Join-Path $Luts $Shipped.Name
+    if (-not (Test-Path -LiteralPath $Target)) {
+        Copy-Item -LiteralPath $Shipped.FullName -Destination $Target
+    }
+}
+
 # The one thing a new user has to do, written where they will look for it.
 $Readme = @'
 Put your own DLSS 5 files in this folder.

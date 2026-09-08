@@ -365,9 +365,9 @@ or type a width and the height follows. That is plain resampling — Lanczos,
 computed in linear light, not a second AI pass — so it fits a delivery spec but
 cannot add detail. Detail comes from Max size.
 
-The default is 4K because that is the size NVIDIA validated, not a limit of the
-tool. Measured here on a 16 GB RTX 4080, with the add-on confirming the neural
-pass running at full size rather than degrading:
+The default is 1920, a game frame's own size; 4K is the size NVIDIA validated,
+not a limit of the tool. Measured here on a 16 GB RTX 4080, with the add-on
+confirming the neural pass running at full size rather than degrading:
 
 | longest edge | time (4 passes) | VRAM |
 | ------------ | --------------- | ---- |

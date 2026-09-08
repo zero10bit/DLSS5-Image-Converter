@@ -18,7 +18,16 @@ def test_neutral_stack_returns_the_input_untouched():
     # The free-when-off contract: nothing enabled means the exact same array
     # back, so an idle effects stack costs nothing on every save and frame.
     img = _image()
-    assert effects.apply(img, EffectsSettings()) is img
+    assert effects.apply(img, EffectsSettings(lut_enabled=False)) is img
+
+
+def test_default_stack_is_the_shipped_tone_lut_only():
+    # The shipped look is just the tone LUT; a missing file must degrade to the
+    # input rather than fail, so an install without the luts folder converts.
+    settings = EffectsSettings()
+    assert effects.describe(settings) == "Lut"
+    img = _image()
+    assert np.array_equal(effects.apply(img, settings, luts_dir=None), img)
 
 
 @pytest.mark.parametrize(
@@ -123,4 +132,4 @@ def test_describe_names_the_enabled_effects():
     settings = EffectsSettings(sharpen_enabled=True, crt_enabled=True)
     described = effects.describe(settings)
     assert "Sharpen" in described and "Crt" in described
-    assert effects.describe(EffectsSettings()) == "None"
+    assert effects.describe(EffectsSettings(lut_enabled=False)) == "None"

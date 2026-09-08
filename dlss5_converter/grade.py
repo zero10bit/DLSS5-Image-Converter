@@ -55,7 +55,9 @@ def _encode_fast(linear: np.ndarray) -> np.ndarray:
 
 @dataclass
 class GradeSettings:
-    """Neutral at all zeros."""
+    """Neutral at all zeros. Ships with a whisper of vibrance, the only grade
+    value the default tone LUT leaves for the sliders (it preserves channel
+    ratios, so it does not touch saturation itself)."""
 
     #: Stops of exposure. A multiply in linear light.
     exposure: float = 0.0
@@ -66,7 +68,7 @@ class GradeSettings:
     #: Saturation that backs off where colour is already strong, so skies and
     #: foliage lift without taking skin with them. The one to reach for first
     #: on a portrait.
-    vibrance: float = 0.0
+    vibrance: float = 0.03
 
     @property
     def is_neutral(self) -> bool:

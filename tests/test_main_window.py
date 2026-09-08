@@ -619,6 +619,7 @@ def test_video_effort_does_not_touch_the_sidebar_passes(window, monkeypatch):
     page.info = _Info()
     page.output_path = gui.Path("out.mp4")
     page.mode_box.setCurrentIndex(0)  # Quick (1 pass)
+    window.settings.evaluation.frames = 8  # distinct from the video run's own count
 
     monkeypatch.setattr(gui.video, "is_available", lambda: True)
     started = {}

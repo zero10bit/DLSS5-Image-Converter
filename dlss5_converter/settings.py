@@ -107,23 +107,25 @@ class NeuralSettings:
     #: Cinematic 9. Natural is the strong one - darker, deeper shadows, more
     #: contrast; Cinematic stays closest to Default. An earlier note here had
     #: the two the other way round, from a single portrait. Default (0) is the
-    #: add-on's own starting look.
-    style: int = 0
-    # Defaults are 1.0 - the midpoint of the 0..2 range - rather than the
-    # gentler values these once held. The old defaults were low enough that on
-    # already-photographic content the change was invisible side by side, and
-    # the commonest first report was "it does nothing". 1.0 is clearly visible
-    # while leaving obvious headroom to push or pull back.
+    #: add-on's own starting look. Cinematic (1) ships as the default: the
+    #: gentlest of the three on game frames, and the one the tuned look below
+    #: was dialled in against.
+    style: int = 1
+    # The strength defaults are a tuned look (the "accurate-target-match"
+    # preset), not the 1.0 midpoints: Skin below 1.0 keeps faces from going
+    # waxy while still resolving pores, Structure above it is where the extra
+    # material detail lives, and Local tone just above it clears the flat
+    # haze the pass otherwise leaves. Intensity stays at the runtime's cap.
     #: Overall strength of the neural pass. 0 is a plain DLAA resolve.
     intensity: float = 1.0
     #: Subsurface-scattering and pore-level work on faces. The reason most
     #: people want this tool, and the first thing to lower when output looks
     #: waxy or "yassified".
-    skin: float = 1.0
+    skin: float = 0.65
     #: Local tone response — how much the model is allowed to relight.
-    local_tone: float = 1.0
+    local_tone: float = 1.1
     #: Micro-contrast and material structure (fabric weave, hair strands).
-    structure: float = 1.0
+    structure: float = 1.3
 
     # --- HDR group ---------------------------------------------------------
     #
@@ -140,8 +142,9 @@ class NeuralSettings:
     #: Scene paper-white, the anchor the model treats as diffuse white. Games in
     #: the wild ship 16 here; the add-on's own default is 1. On an HDR/OLED
     #: display this is the control that decides how bright "white" is assumed to
-    #: be, and therefore how hard the pass pushes highlights.
-    paper_white: float = 1.0
+    #: be, and therefore how hard the pass pushes highlights. 0.9 holds the
+    #: highlights back a touch from the add-on's 1.0.
+    paper_white: float = 0.9
 
 
 @dataclass
@@ -165,8 +168,9 @@ class DepthSettings:
     estimate_for_stills: bool = False
     #: Compresses or expands the near-far spread before it becomes hardware
     #: depth. Above 1.0 pushes the scene towards the near plane, which makes the
-    #: model treat more of the frame as foreground.
-    contrast: float = 1.0
+    #: model treat more of the frame as foreground. Only sequences, video and
+    #: the Depth view see it (stills skip depth, above).
+    contrast: float = 3.0
 
 
 @dataclass
@@ -177,7 +181,10 @@ class EvaluationSettings:
     #: Measured: more frames do not make the pass *stronger* (mean change from
     #: the source is the same at 1, 10 and 20), they make it *settle* - one
     #: frame differs from the ten-frame result by ~1.5 levels, four by ~0.8.
-    frames: int = 8
+    #: One frame is the default: the ~1.5-level settle is below what shows in
+    #: an A/B, and it makes every run several times faster. Raise it for a
+    #: final render if the result looks unsettled.
+    frames: int = 1
     #: Halton sub-pixel offsets, resampling the source each frame. This is the
     #: only way a still image gives DLSS the sample diversity it was built
     #: around. It cannot invent information the photo lacks, but it does stop
@@ -193,8 +200,10 @@ class EvaluationSettings:
     #: pass running at full 7680x4320 rather than quietly degrading. The cap
     #: stays at 4K as a *default* because it is the validated size and a sane
     #: first run, not because larger does not work — people doing architectural
-    #: renders at 5-6K should raise it.
-    max_edge: int = 3840
+    #: renders at 5-6K should raise it. 1920 is the default because game
+    #: frames are the common input and the 4K validation above still stands
+    #: for anyone who raises it.
+    max_edge: int = 1920
     #: Re-run DLSS automatically when a neural slider moves.
     #:
     #: Not free, and not a live renderer: the add-on reads its configuration
@@ -249,10 +258,13 @@ class DetailSettings:
     #:              resolution; the faithful, free default).
     #: "boost"    — supersample: upscale the source, crispen, run DLSS at that
     #:              size, then downscale. Slow, punchy, for high-end renders.
-    mode: str = "off"
+    #: "preserve" at full amount is the default: it hands the source's own
+    #: texture back at no cost, where Boost x4 measurably halves the neural
+    #: change (see ROADMAP.md).
+    mode: str = "preserve"
     #: Preserve: how much source detail to blend back, 0..1.
     #: Boost: strength of the pre-DLSS crispen.
-    amount: float = 0.75
+    amount: float = 1.0
     #: Gaussian radius of the high/low frequency split, in pixels.
     radius: float = 2.0
     #: Boost only: how far to supersample (2, 4 or 8). Higher processes the
@@ -291,9 +303,12 @@ class EffectsSettings:
     chroma_enabled: bool = False
     chroma_amount: float = 0.4        # 0..1
 
-    # LUT (.cube from the luts folder).
-    lut_enabled: bool = False
-    lut_name: str = ""                # filename in paths.luts_dir()
+    # LUT (.cube from the luts folder). The tone LUT ships with the app (see
+    # luts/ in the source tree) and is on by default; it lands the blacks a
+    # contrast push cannot reach without clipping. A missing file degrades to
+    # "no LUT" in effects.apply, so an install without it still converts.
+    lut_enabled: bool = True
+    lut_name: str = "tone-target-match.cube"  # filename in paths.luts_dir()
     lut_amount: float = 1.0           # 0..1 blend
 
     # CRT (scanlines / phosphor mask / tube curvature).

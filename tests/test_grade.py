@@ -21,14 +21,14 @@ def image():
 
 def test_neutral_is_a_true_no_op(image):
     """Not "close enough" - the same object, with no transfer round trip."""
-    assert apply(image, GradeSettings()) is image
+    assert apply(image, GradeSettings(vibrance=0.0)) is image
 
 
 def test_exposure_is_a_stop(image):
     """+1 stop is a doubling in linear light, not of the sRGB value."""
     from dlss5_converter.contract import linear_to_srgb, srgb_to_linear
 
-    graded = apply(image, GradeSettings(exposure=1.0))
+    graded = apply(image, GradeSettings(exposure=1.0, vibrance=0.0))
     expected = np.clip(linear_to_srgb(srgb_to_linear(image) * 2.0), 0.0, 1.0)
     assert np.allclose(graded, expected, atol=1e-5)
 

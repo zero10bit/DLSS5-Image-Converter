@@ -36,7 +36,7 @@ def test_corrupt_file_falls_back_to_defaults(tmp_path):
 
 
 def test_missing_file_falls_back_to_defaults(tmp_path):
-    assert AppSettings.load(tmp_path / "nope.json").evaluation.frames == 8
+    assert AppSettings.load(tmp_path / "nope.json").evaluation.frames == 1
 
 
 def test_out_of_range_neural_values_are_clamped_on_load(tmp_path):
