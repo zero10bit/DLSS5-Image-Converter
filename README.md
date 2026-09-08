@@ -76,9 +76,10 @@ mid, uniform noise — came back byte-identical from the neural pass, with and
 without motion vectors. The runtime binds depth and the add-on hands it on as a
 guide, but the DLSSNR 310.8 snippet does not read it for this workload - even
 with fake motion vectors, which do change the output, real and noise depth stay
-identical. Stills therefore skip depth estimation by default
-(`DepthSettings.estimate_for_stills`); the Depth view is the only thing that
-needs it. Sequences and video still estimate, or take renderer depth.
+identical. Stills can skip depth estimation (`DepthSettings.estimate_for_stills`,
+a sidebar checkbox); it stays on by default only because the Depth view and the
+point-cloud reveal are built from it. Sequences and video still estimate, or take
+renderer depth.
 
 The harness runs a hidden 64×64 swapchain and presents once per evaluation, which
 turns out to be enough for ReShade to attach and load the add-on in a **headless**

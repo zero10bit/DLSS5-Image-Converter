@@ -85,9 +85,10 @@ came out of measuring the others.
 - [x] **The depth plane does not influence the neural result on this path.**
       Re-tested with motion vectors present (which *do* change the output, so
       the temporal path is live): real and noise depth still byte-identical.
-      There is no way to make it matter on this runtime. Stills now skip depth
-      estimation by default (`DepthSettings.estimate_for_stills`, off), the
-      batch path too; a Settings checkbox brings it back for the Depth view.
+      There is no way to make it matter on this runtime. Stills can skip depth
+      estimation (`DepthSettings.estimate_for_stills`, sidebar checkbox), the
+      batch path too. Default is on since the v0.3.1 merge: the point-cloud
+      reveal and the Depth view are built from the plane.
       Sequences and video unchanged. Tests in `tests/test_scratch_cleanup.py`.
       Original note:
       Six depth planes for one frame — Depth Anything's estimate, its inverse,

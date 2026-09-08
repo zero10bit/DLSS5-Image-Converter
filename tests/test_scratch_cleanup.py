@@ -156,30 +156,33 @@ class _RefusingEngine:
         raise AssertionError("depth inferred for a still with estimation off")
 
 
-def test_stills_skip_depth_estimation_by_default(tmp_path):
-    import cv2
-
-    path = tmp_path / "still.png"
-    cv2.imwrite(str(path), np.full((64, 96, 3), 120, np.uint8))
-    prepared = pipeline.prepare(path, AppSettings(), _RefusingEngine())
-    assert prepared.inverse_depth.shape == (64, 96)
-    assert float(prepared.inverse_depth.min()) == float(prepared.inverse_depth.max()) == 0.5
-
-
-def test_stills_estimate_depth_when_asked(tmp_path):
+def test_stills_skip_depth_estimation_when_asked(tmp_path):
     import cv2
 
     path = tmp_path / "still.png"
     cv2.imwrite(str(path), np.full((64, 96, 3), 120, np.uint8))
     settings = AppSettings()
-    settings.depth.estimate_for_stills = True
+    settings.depth.estimate_for_stills = False
+    prepared = pipeline.prepare(path, settings, _RefusingEngine())
+    assert prepared.inverse_depth.shape == (64, 96)
+    assert float(prepared.inverse_depth.min()) == float(prepared.inverse_depth.max()) == 0.5
+
+
+def test_stills_estimate_depth_by_default(tmp_path):
+    # On by default since the point-cloud reveal is built from the plane.
+    import cv2
+
+    path = tmp_path / "still.png"
+    cv2.imwrite(str(path), np.full((64, 96, 3), 120, np.uint8))
+    settings = AppSettings()
+    assert settings.depth.estimate_for_stills
     prepared = pipeline.prepare(path, settings, _FakeEngine())
     assert float(prepared.inverse_depth.mean()) == 0.5  # _FakeEngine's constant
     with pytest.raises(AssertionError, match="loaded"):
         pipeline.prepare(path, settings, _RefusingEngine())
 
 
-def test_batch_skips_depth_by_default(scratch, monkeypatch, tmp_path):
+def test_batch_skips_depth_when_asked(scratch, monkeypatch, tmp_path):
     import cv2
 
     monkeypatch.setattr(evaluator, "Harness", _FakeHarness)
@@ -188,6 +191,8 @@ def test_batch_skips_depth_by_default(scratch, monkeypatch, tmp_path):
         path = tmp_path / f"b_{i}.png"
         cv2.imwrite(str(path), np.full((64, 96, 3), 100 + i, np.uint8))
         images.append(path)
-    done = list(pipeline.convert_batch(images, _settings(), _RefusingEngine(), tmp_path / "out"))
+    settings = _settings()
+    settings.depth.estimate_for_stills = False
+    done = list(pipeline.convert_batch(images, settings, _RefusingEngine(), tmp_path / "out"))
     assert [d.error for d in done] == ["", ""]
     assert list(scratch.iterdir()) == []

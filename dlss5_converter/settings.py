@@ -156,16 +156,17 @@ class DepthSettings:
     #: Tile the depth pass for large images. Slow, but the only way to get
     #: hair-level depth detail out of a 4K portrait.
     tiled: bool = False
-    #: Run depth estimation on stills at all. Off by default because it makes
-    #: no difference to the result: measured on this runtime (DLSSNR 310.8),
-    #: six different depth planes for one frame - the estimate, its inverse,
-    #: flat near, flat far, flat mid, uniform noise - came back byte-identical,
-    #: with and without motion vectors (motion itself does change the output,
-    #: so the temporal path is live; depth is simply never read). Estimating it costs a
-    #: model load and an inference per image for nothing but the Depth view;
-    #: turn this on when you want to see that view. Sequences and video keep
-    #: estimating (or use renderer depth) regardless.
-    estimate_for_stills: bool = False
+    #: Run depth estimation on stills at all. It makes no difference to the
+    #: result: measured on this runtime (DLSSNR 310.8), six different depth
+    #: planes for one frame - the estimate, its inverse, flat near, flat far,
+    #: flat mid, uniform noise - came back byte-identical, with and without
+    #: motion vectors (motion itself does change the output, so the temporal
+    #: path is live; depth is simply never read). It stays on by default only
+    #: because the Depth view and the point-cloud reveal are built from it; a
+    #: flat plane leaves both flat. Turn it off to save the model load and one
+    #: Small inference per image. Sequences and video keep estimating (or use
+    #: renderer depth) regardless.
+    estimate_for_stills: bool = True
     #: Compresses or expands the near-far spread before it becomes hardware
     #: depth. Above 1.0 pushes the scene towards the near plane, which makes the
     #: model treat more of the frame as foreground. Only sequences, video and

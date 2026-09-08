@@ -4031,10 +4031,10 @@ class MainWindow(QMainWindow):
         self.estimate_stills.setToolTip(
             "Measured on this runtime, the depth plane does not change a "
             "still's result at all (real and noise depth come back "
-            "byte-identical, with or without motion vectors). Skipping it "
-            "saves the model load and an inference per image, at the cost of "
-            "a flat Depth view and a flat point-cloud reveal. Sequences and "
-            "video are unaffected."
+            "byte-identical, with or without motion vectors). It only feeds "
+            "the Depth view and the point-cloud reveal. Turn it off to skip "
+            "the model load and one inference per image; both views then go "
+            "flat. Sequences and video are unaffected."
         )
         self.estimate_stills.setChecked(self.settings.depth.estimate_for_stills)
         self.estimate_stills.toggled.connect(self._estimate_stills_changed)
