@@ -5,18 +5,50 @@ first conversion: ``bootstrap.is_ready`` uses ``find_spec``, which *locates*
 PyTorch without importing it, so a missing transitive dependency stays invisible
 until something tries to use it.
 
-Output goes to stderr, which a windowed build still writes to a redirect, so:
+The report is written to ``report.txt`` beside the executable (the working
+directory when run from source), and echoed to stderr where one exists:
 
-    DLSS5Converter.exe --selftest 2> report.txt
+    DLSS5Converter.exe --selftest
+
+The frozen exe is a GUI-subsystem binary, so a shell redirect of stderr
+(``2> report.txt``) hands it a stream that fails on the first write with
+``OSError: [Errno 22]`` and the run dies part-way (issue #11). Writing the file
+ourselves is what makes the documented instruction true; stderr is best-effort.
 """
 
 from __future__ import annotations
 
 import sys
+from pathlib import Path
+
+#: Every line of the current run, for report.txt.
+_REPORT: list[str] = []
 
 
 def _line(text: str = "") -> None:
-    print(text, file=sys.stderr, flush=True)
+    _REPORT.append(text)
+    try:
+        print(text, file=sys.stderr, flush=True)
+    except (OSError, ValueError):
+        # A redirected stderr on a windowed exe, or a closed stream: the
+        # report file still gets everything.
+        pass
+
+
+def report_path() -> Path:
+    """Where the self-test report goes: beside the exe, or the cwd from source."""
+    from . import paths
+
+    return (paths.app_dir() if paths.is_frozen() else Path.cwd()) / "report.txt"
+
+
+def _write_report() -> Path | None:
+    path = report_path()
+    try:
+        path.write_text("\n".join(_REPORT) + "\n", encoding="utf-8")
+    except OSError:
+        return None
+    return path
 
 
 def run_gpu_check() -> int:
@@ -76,7 +108,18 @@ def run_gpu_check() -> int:
 
 
 def run_selftest() -> int:
-    """Return 0 if the app can do its job, 1 otherwise."""
+    """Return 0 if the app can do its job, 1 otherwise. Writes report.txt."""
+    _REPORT.clear()
+    try:
+        return _run_selftest()
+    finally:
+        # Written even when a check raised part-way: a truncated report that
+        # exists beats a complete one that was never saved.
+        written = _write_report()
+        _line(f"report written to {written}" if written else "report.txt could not be written")
+
+
+def _run_selftest() -> int:
     failures = 0
 
     _line("DLSS 5 Image & Video Converter - self test")
@@ -227,7 +270,17 @@ def run_selftest() -> int:
         try:
             runtime.stage_runtime(status)
             _line("")
-            _line(evaluator.probe(status.harness))
+            report = evaluator.probe(status.harness)
+            _line(report)
+            # The probe fields are the truth about the neural path; a run can
+            # print "conversion: ok" with the add-on refused and the image a
+            # plain DLAA resolve. Interpret them, with ReShade's own log so a
+            # standard (non add-on) ReShade build is named as the cause.
+            for problem in evaluator.interpret_probe(
+                report, status.harness.parent / "ReShade.log"
+            ):
+                _line(f"  ! {problem}")
+                failures += 1
         except Exception as error:  # noqa: BLE001
             _line(f"probe            : FAILED - {error}")
             failures += 1

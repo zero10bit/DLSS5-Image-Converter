@@ -5097,7 +5097,9 @@ class MainWindow(QMainWindow):
             )
         else:
             self.statusBar().showMessage("DLSS 5 did not load — see the message.")
-            problems = evaluator.interpret_probe(report)
+            problems = evaluator.interpret_probe(
+                report, paths.native_exe().parent / "ReShade.log"
+            )
             detail = "\n\n".join(problems) if problems else (
                 "The live DLSS test did not pass."
             )
@@ -5872,7 +5874,11 @@ class MainWindow(QMainWindow):
         # test with every field 0 (issue #6). Interpret the fields into a plain
         # cause, show it first, and treat a failed probe as a problem so the
         # Troubleshooting button appears.
-        probe_problems = evaluator.interpret_probe(report) if report else []
+        probe_problems = (
+            evaluator.interpret_probe(report, status.harness.parent / "ReShade.log")
+            if report and status.harness
+            else []
+        )
         extra: list[str] = []
         if probe_problems:
             extra += [""] + probe_problems

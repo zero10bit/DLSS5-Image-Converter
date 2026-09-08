@@ -3,13 +3,15 @@
 Start here, always:
 
 ```powershell
-DLSS5Converter.exe --selftest 2> report.txt
+DLSS5Converter.exe --selftest
 ```
 
 That runs a real conversion end to end — loads ONNX Runtime, runs a depth
-inference on DirectML, evaluates DLSS, and prints what the RenoDX add-on said, including its
-version. Paste `report.txt` into any bug report and most of the questions below
-answer themselves.
+inference on DirectML, evaluates DLSS, and records what the RenoDX add-on said,
+including its version. It writes **`report.txt` beside the exe** itself. Do not
+redirect stderr (`2> report.txt`): the exe is a windowed build and that redirect
+hands it a stream that fails on the first write, leaving an empty file. Paste
+`report.txt` into any bug report and most of the questions below answer themselves.
 
 ---
 
@@ -18,7 +20,16 @@ answer themselves.
 By far the most common report, and it has two completely different causes that
 produce the same symptom.
 
-**First, update your RenoDX add-on.** An out-of-date `renodx-dlss5.addon64` was
+**First, check the report for `neural_addon_loaded: 0`.** If ReShade loaded
+(`reshade_proxy_loaded: 1`) but the add-on did not, the self-test now names why.
+The commonest cause is the **standard ReShade build**: it injects fine and
+silently refuses every add-on, so `test_evaluation: ok` and a finished
+conversion are a plain DLAA resolve. `engine\ReShade.log` says
+`Skipped loading add-on ... limited add-on functionality`. Install the
+**Add-on variant** of the ReShade installer (`ReShade_Setup_x.y.z_Addon.exe`)
+and use its `ReShade64.dll` as `dlss_files\dxgi.dll`.
+
+**Then update your RenoDX add-on.** An out-of-date `renodx-dlss5.addon64` was
 the cause on an RTX 5070 — every indicator green, no error, image unchanged.
 Updating it fixed it. `--selftest` prints the version it loaded.
 

@@ -466,8 +466,33 @@ def probe(exe: Path, timeout: float = _PROBE_TIMEOUT) -> str:
     return (out or err or "").strip() or "No output."
 
 
-def interpret_probe(report: str) -> list[str]:
+#: What the standard (non add-on) ReShade build writes when it refuses an
+#: add-on. The add-on build carries the same text in its resources, so the DLL
+#: itself cannot be told apart by scanning it; the log line is the proof.
+RESHADE_REFUSED_ADDON = "limited add-on functionality"
+
+
+def reshade_refused_addon(log_path: Path | None) -> bool:
+    """Whether ReShade's own log says it skipped the add-on for lack of support.
+
+    A standard ReShade build injects fine and silently refuses every add-on,
+    so the neural pass never runs while every other indicator looks healthy.
+    ReShade names the cause in its log and nowhere else; read it from there.
+    """
+    if log_path is None:
+        return False
+    try:
+        text = Path(log_path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return RESHADE_REFUSED_ADDON in text
+
+
+def interpret_probe(report: str, reshade_log: Path | None = None) -> list[str]:
     """Turn the harness's raw probe fields into plain problems and fixes.
+
+    ``reshade_log`` is the harness folder's ReShade.log when the caller has it;
+    it turns "the add-on did not load" into the one reason ReShade states.
 
     The harness prints machine fields (``reshade_proxy_loaded: 0`` …). On a
     failed run they are all 0 and ``test_evaluation`` carries a raw NGX code like
@@ -507,11 +532,22 @@ def interpret_probe(report: str) -> list[str]:
             "ReShade renamed to dxgi.dll; a stub or a 32-bit build will not load."
         )
     elif is_on("neural_addon_loaded") is False:
-        problems.append(
-            "ReShade loaded but the RenoDX DLSS 5 add-on did not "
-            "(neural_addon_loaded: 0). Check renodx-dlss5.addon64 is present "
-            "beside the harness and is a current build."
-        )
+        if reshade_refused_addon(reshade_log):
+            problems.append(
+                "This ReShade build cannot load add-ons (neural_addon_loaded: 0; "
+                "ReShade.log: \"skipped loading add-on ... limited add-on "
+                "functionality\"). It is the standard build. Install ReShade's "
+                "Add-on variant (ReShade_Setup_x.y.z_Addon.exe) and use its "
+                "ReShade64.dll as dlss_files\\dxgi.dll."
+            )
+        else:
+            problems.append(
+                "ReShade loaded but the RenoDX DLSS 5 add-on did not "
+                "(neural_addon_loaded: 0). Either renodx-dlss5.addon64 is missing "
+                "or stale beside the harness, or this dxgi.dll is the standard "
+                "ReShade build, which refuses every add-on - the Add-on variant "
+                "of the ReShade installer is the one that works."
+            )
     elif is_on("dlssnr_module_loaded") is False:
         problems.append(
             "The add-on loaded but the neural renderer did not attach "

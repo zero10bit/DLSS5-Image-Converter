@@ -521,11 +521,12 @@ runtime when it finds a problem.
 Start with:
 
 ```powershell
-DLSS5Converter.exe --selftest 2> report.txt
+DLSS5Converter.exe --selftest
 ```
 
-That runs a real conversion end to end and prints your GPU, driver, add-on
-version and what the add-on said. Most questions answer themselves from it.
+That runs a real conversion end to end and writes `report.txt` beside the exe
+with your GPU, driver, add-on version and what the add-on said. Most questions
+answer themselves from it.
 
 There is a Blender test scene in [`blender/`](blender/) that renders matched
 beauty and depth sequences for trying out sequence mode.

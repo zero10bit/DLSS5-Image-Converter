@@ -114,3 +114,22 @@ came out of measuring the others.
 - [x] Full suite 286 passed, 12 skipped. Installed build: `--selftest` PASS
       (window step, SDR and HDR conversions), GUI launch and close clean, no
       new exceptions logged, scratch folder empty afterwards.
+
+## Reported issues (github.com/criso2hd-alt/DLSS5-Image-Converter)
+
+- [x] #9 LUT enabled crashes every launch — fixed (toggle order), `tests/test_effects_page.py`.
+- [x] #12 First run crashes in onboarding / self-test dies after `jpeg xr` — fixed
+      (`MainWindow(startup=False)` for throwaway windows, self-test closes properly).
+- [x] #11 `--selftest 2> report.txt` cannot work on a GUI-subsystem exe — the
+      self-test now writes `report.txt` beside the exe itself and treats stderr as
+      best-effort; docs updated. `tests/test_selftest_report.py`.
+- [x] #10 Runtime check passes with a standard (non add-on) ReShade — the probe
+      interpretation reads `engine\ReShade.log` and names the cause when ReShade
+      refused the add-on; the self-test now counts an add-on that did not load as
+      a failure instead of printing PASS. The DLL itself cannot be told apart by
+      scanning: the add-on build carries the same "limited add-on functionality"
+      text in its resources. `tests/test_probe_interpretation.py`.
+
+Merged upstream `claude/v0.3.1-fixes` (Streamline finder, model fallback, tour
+gating) on top; conflict in `ensure_model_downloaded` resolved to the local
+behaviour. A teardown race in `RuntimeProbe` surfaced by the merged tests is fixed.

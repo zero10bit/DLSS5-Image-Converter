@@ -62,3 +62,37 @@ def test_an_old_driver_is_called_out():
     )
     problems = interpret_probe(report)
     assert any("driver" in p.lower() for p in problems)
+
+
+STANDARD_RESHADE_PROBE = """adapter: NVIDIA GeForce RTX 4070 SUPER
+dlss_available: 1
+needs_driver_update: 0
+reshade_proxy_loaded: 1
+neural_addon_loaded: 0
+dlssnr_module_loaded: 0
+test_evaluation: ok
+"""
+
+
+def test_a_standard_reshade_build_is_named_from_its_own_log(tmp_path):
+    """Issue #10: a non add-on ReShade injects fine and silently refuses every
+    add-on; the probe says test_evaluation: ok and the self-test printed PASS.
+    ReShade's log holds the only statement of the cause."""
+    log = tmp_path / "ReShade.log"
+    log.write_text(
+        "INFO  | Registered ...\n"
+        "WARN  | Skipped loading add-on from 'renodx-dlss5.addon64' because this "
+        "build of ReShade has only limited add-on functionality.\n",
+        encoding="utf-8",
+    )
+    problems = interpret_probe(STANDARD_RESHADE_PROBE, log)
+    assert len(problems) == 1
+    assert "cannot load add-ons" in problems[0]
+    assert "Add-on variant" in problems[0]
+
+
+def test_an_addon_that_did_not_load_is_still_reported_without_the_log(tmp_path):
+    problems = interpret_probe(STANDARD_RESHADE_PROBE, tmp_path / "missing.log")
+    assert len(problems) == 1
+    assert "neural_addon_loaded: 0" in problems[0]
+    assert "Add-on variant" in problems[0]
