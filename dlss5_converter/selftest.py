@@ -236,16 +236,21 @@ def _run_selftest() -> int:
             linear=np.full((64, 96, 3), 0.2, np.float32),
         )
         window._begin_progress()
+        # The depth view runs the self-animated point-cloud reveal now, which
+        # ignores the pass count (see reveal.py), so "the sweep reached 0.5"
+        # would fail on every build. What matters is that the reveal came up
+        # for the run and went away with it.
+        revealed = window.depth_view.cloud_active()
         window._report_progress("DLSS 5 pass 4 of 8")
-        swept = window.depth_view._progress
         window._end_progress()
+        cleared = not window.depth_view.cloud_active()
         for view in ("photo", "depth", "result", "difference"):
             window.show_view(view)
         window.close()  # the real teardown: stops workers, waits for threads
         window.deleteLater()
         if owned:
             application.processEvents()
-        ok = swept == 0.5
+        ok = revealed and cleared
         _line(f"window           : {'ok' if ok else 'FAILED'} (buttons reachable)")
         if not ok:
             failures += 1

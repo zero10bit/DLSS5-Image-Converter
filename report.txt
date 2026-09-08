@@ -1,0 +1,35 @@
+DLSS 5 Image & Video Converter - self test
+==============================================
+frozen           : False
+app folder       : C:\Users\Irza\Downloads\Misc_Soft\DLSS5-Image-Converter\source
+models folder    : C:\Users\Irza\AppData\Local\DLSS5Converter\models
+
+onnxruntime      : 1.24.4
+providers        : DmlExecutionProvider, CPUExecutionProvider
+cv2              : ok
+numpy            : ok
+PIL              : ok
+depth inference  : ok (256, 256) range [0.000, 1.000] on directml
+jpeg xr          : ok (peak 8.00, expected 8.00)
+window           : ok (buttons reachable)
+
+harness          : C:\Users\Irza\Downloads\Misc_Soft\DLSS5-Image-Converter\source\native\bin\dlss5_eval.exe
+neural dll       : not found
+dlss dll         : not found
+addon            : not found
+reshade          : not found
+  ! nvngx_dlssnr.dll was not found. Point the runtime folder at your own copy of the DLSS 5 files.
+  ! nvngx_dlss.dll was not found. The neural pass runs inside a DLSS Super Resolution evaluation, so both DLLs are required. Point the runtime folder at your own copy of the DLSS 5 files. It ships inside Streamline, under Production - a zipped Streamline in that folder is opened automatically, so if you are seeing this the archive does not contain it.
+  ! No RenoDX DLSS add-on was found (a .addon64 file, such as renodx-dlss5.addon64; RenoDX has also shipped it as dlss.addon64). Without the add-on the harness produces a plain DLAA resolve and no neural enhancement. Point the runtime folder at your own copy of the DLSS 5 files.
+
+staged beside the harness: dxgi.dll, nvngx_dlss.dll, nvngx_dlssnr.dll, renodx-dlss5.addon64
+
+what the add-on reported:
+  Registered add-on "DLSS 5 Neural Rendering" v0.2026.828.517 using ReShade API version 18.
+  [DLSS 5 Neural Rendering] DLSS5 Generic: RenoDX DLSS5 Generic v4.7 (build Sep  2 2026 01:15:39) loaded (hotkeys: NR toggle F6, screenshot F5) | EnableHooks=2: NGX hooks only, Streamline modules left u
+  [DLSS 5 Neural Rendering] DLSS5 Generic: signed runtime sha256 8270B350CD82DE5CE89806872CDD6B6A9249B80836B91BBEB3573470744CC206 (custom runtime accepted; untested build, NR failures may be specific to
+  [DLSS 5 Neural Rendering] DLSS5 Generic: signed NR runtime (nvngx_dlssnr.dll) pre-loaded at device init
+  [DLSS 5 Neural Rendering] vtable::Hook(Failed to find NVSDK_NGX_D3D12_EvaluateFeature_C)
+  Unregistered add-on "DLSS 5 Neural Rendering".
+==============================================
+PASS
